@@ -1,0 +1,9 @@
+/vendor
+/.git*
+/.idea
+
+/conf/conf.json
+/conf/conf.local.json
+
+storage/state.json
+storage/logs

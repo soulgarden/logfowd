@@ -1,0 +1,16 @@
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - funlen
+        - dupl
+    - path: /
+      linters:
+        - gci
+        - gofumpt
+        - exhaustivestruct
+        - wrapcheck
+        - tagliatelle
+        - varnamelen
+  enable-all: true
+

@@ -1,0 +1,16 @@
+{
+  "env": "local",
+  "debug_mode": true,
+  "elasticsearch": {
+    "host": "http://elasticsearch",
+    "port": "9200",
+    "index_name": "logfowd",
+    "flush_interval": 1000
+  },
+  "poll": true,
+  "state_path": "./storage/state.json",
+  "logs_path": [
+    "/var/lib/docker/containers",
+    "/var/log/containers"
+  ]
+}
