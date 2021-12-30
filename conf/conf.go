@@ -15,6 +15,7 @@ type Config struct {
 		Port          string `json:"port" default:"9200"`
 		IndexName     string `json:"index_name" default:"logfowd"`
 		FlushInterval int    `json:"flush_interval" default:"1000"`
+		Workers       int    `json:"workers" default:"3"`
 	} `json:"elasticsearch"`
 	StatePath string   `json:"state_path" default:"./storage/state.json"`
 	LogsPath  []string `json:"logs_path" default:"/var/lib/docker/containers"`

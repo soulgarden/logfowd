@@ -2,8 +2,8 @@
 /.git*
 /.idea
 
-/conf/conf.json
-/conf/conf.local.json
+/conf/config.json
+/conf/config.local.json
 
 storage/state.json
 storage/logs

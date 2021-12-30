@@ -15,6 +15,10 @@ type IndexRequestBody struct {
 }
 
 type FieldsBody struct {
-	Message   string    `json:"message"`
-	Timestamp time.Time `json:"@timestamp"`
+	Message       string    `json:"message"`
+	Timestamp     time.Time `json:"@timestamp"`
+	PodName       string    `json:"pod_name"`
+	Namespace     string    `json:"namespace"`
+	ContainerName string    `json:"container_name"`
+	ContainerID   string    `json:"container_id"`
 }

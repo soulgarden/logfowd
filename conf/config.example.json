@@ -5,7 +5,8 @@
     "host": "http://elasticsearch",
     "port": "9200",
     "index_name": "logfowd",
-    "flush_interval": 1000
+    "flush_interval": 1000,
+    "workers": 3
   },
   "poll": true,
   "state_path": "./storage/state.json",

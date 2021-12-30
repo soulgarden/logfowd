@@ -6,8 +6,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
+
+	"github.com/soulgarden/logfowd/entity"
 
 	"github.com/nxadm/tail"
 	"github.com/soulgarden/logfowd/storage"
@@ -23,11 +26,13 @@ type Watcher struct {
 	cfg          *conf.Config
 	addCh        chan string
 	delCh        chan string
-	changes      chan bool
-	logs         chan *tail.Line
-	hasLog       chan bool
+	change       chan bool
+	event        chan *entity.Event
+	esEvents     chan []*entity.Event
+	hasEvent     chan bool
 	stateManager *State
 	esCli        *Cli
+	k8sRegexp    *regexp.Regexp
 	state        *storage.State
 	logger       *zerolog.Logger
 }
@@ -37,22 +42,24 @@ func NewWatcher(cfg *conf.Config, stateManager *State, esCli *Cli, logger *zerol
 		cfg:          cfg,
 		addCh:        make(chan string, 1),
 		delCh:        make(chan string, 1),
-		changes:      make(chan bool, dictionary.FlushChangesChannelSize),
-		logs:         make(chan *tail.Line, dictionary.LogsChannelSize),
-		hasLog:       make(chan bool, dictionary.LogsChannelSize),
+		change:       make(chan bool, dictionary.FlushChangesChannelSize),
+		event:        make(chan *entity.Event, dictionary.LogsChannelSize),
+		esEvents:     make(chan []*entity.Event, cfg.ES.Workers*dictionary.SendBatchesNum),
+		hasEvent:     make(chan bool, dictionary.LogsChannelSize),
 		stateManager: stateManager,
 		esCli:        esCli,
+		k8sRegexp:    regexp.MustCompile(dictionary.K8sRegexp),
 		state:        storage.NewState(),
 		logger:       logger,
 	}
 }
 
 func (s *Watcher) Start(ctx context.Context) {
-	var primaryWg sync.WaitGroup
+	var wg sync.WaitGroup
 
 	c, cancel := context.WithCancel(ctx)
 
-	if err := s.syncState(c, &primaryWg); err != nil {
+	if err := s.syncState(c, &wg); err != nil {
 		s.logger.Err(err).Msg("sync state")
 
 		cancel()
@@ -60,10 +67,10 @@ func (s *Watcher) Start(ctx context.Context) {
 		return
 	}
 
-	primaryWg.Add(primaryGoroutinesNum)
+	wg.Add(primaryGoroutinesNum + s.cfg.ES.Workers)
 
 	go func() {
-		err := s.statePersister(c, &primaryWg)
+		err := s.statePersister(c, &wg)
 		if err != nil {
 			s.logger.Err(err).Msg("state persister")
 
@@ -72,7 +79,7 @@ func (s *Watcher) Start(ctx context.Context) {
 	}()
 
 	go func() {
-		err := s.listenAddFile(c, &primaryWg)
+		err := s.listenAddFile(c, &wg)
 		if err != nil {
 			s.logger.Err(err).Msg("listen add file")
 
@@ -80,19 +87,23 @@ func (s *Watcher) Start(ctx context.Context) {
 		}
 	}()
 
+	go s.esSendDispatcher(c, &wg)
+
+	for i := 0; i < s.cfg.ES.Workers; i++ {
+		go func(c context.Context, wg *sync.WaitGroup) {
+			err := s.esSender(c, wg)
+			if err != nil {
+				s.logger.Err(err).Msg("es sender")
+
+				cancel()
+			}
+		}(c, &wg)
+	}
+
+	go s.listenDelFile(c, &wg)
+
 	go func() {
-		err := s.esSender(c, &primaryWg)
-		if err != nil {
-			s.logger.Err(err).Msg("es sender")
-
-			cancel()
-		}
-	}()
-
-	go s.listenDelFile(c, &primaryWg)
-
-	go func() {
-		err := s.watchForLogFiles(c, &primaryWg)
+		err := s.watchForLogFiles(c, &wg)
 		if err != nil {
 			s.logger.Err(err).Msg("watch for log files")
 
@@ -100,7 +111,7 @@ func (s *Watcher) Start(ctx context.Context) {
 		}
 	}()
 
-	primaryWg.Wait()
+	wg.Wait()
 
 	s.logger.Err(s.stateManager.SaveState(s.state.FlushChanges())).Msg("save state before shutdown")
 }
@@ -117,7 +128,7 @@ func (s *Watcher) watchForLogFiles(ctx context.Context, wg *sync.WaitGroup) erro
 			for _, path := range s.cfg.LogsPath {
 				err := s.list(path)
 				if err != nil {
-					s.logger.Err(err).Msg("list logs dir")
+					s.logger.Err(err).Msg("list event dir")
 
 					return err
 				}
@@ -131,7 +142,7 @@ func (s *Watcher) watchForLogFiles(ctx context.Context, wg *sync.WaitGroup) erro
 func (s *Watcher) list(logPath string) error {
 	err := filepath.WalkDir(logPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			s.logger.Err(err).Str("path", path).Msg("list logs dir")
+			s.logger.Err(err).Str("path", path).Msg("list event dir")
 
 			return err
 		}
@@ -147,7 +158,7 @@ func (s *Watcher) list(logPath string) error {
 		return err
 	})
 	if err != nil {
-		s.logger.Err(err).Msg("list logs dir")
+		s.logger.Err(err).Msg("list event dir")
 	}
 
 	return err
@@ -165,7 +176,10 @@ func (s *Watcher) listenAddFile(ctx context.Context, wg *sync.WaitGroup) error {
 		for {
 			select {
 			case path := <-s.addCh:
-				s.state.AddFile(path)
+				s.state.AddFile(path, &entity.State{
+					SeekInfo: nil,
+					Meta:     s.parseK8sMeta(path),
+				})
 
 				s.makeChange()
 
@@ -241,7 +255,7 @@ func (s *Watcher) tailFile(ctx context.Context, wg *sync.WaitGroup, path string)
 			ReOpen:    false,
 			MustExist: true,
 			Poll:      s.cfg.Poll,
-			Location:  &fileState,
+			Location:  fileState.SeekInfo,
 			Logger:    log.New(s.logger, "", 0),
 		},
 	)
@@ -260,11 +274,11 @@ func (s *Watcher) tailFile(ctx context.Context, wg *sync.WaitGroup, path string)
 				return nil
 			}
 
-			s.state.UpdateFileState(path, line.SeekInfo)
+			s.state.UpdateFileSeekInfo(path, &line.SeekInfo)
 
 			s.makeChange()
 
-			s.addLogToBuffer(line)
+			s.addLogToBuffer(entity.NewEvent(line, fileState.Meta))
 		case <-ctx.Done():
 			err = t.Stop()
 			if err != nil {
@@ -274,8 +288,7 @@ func (s *Watcher) tailFile(ctx context.Context, wg *sync.WaitGroup, path string)
 			for len(t.Lines) > 0 {
 				line := <-t.Lines
 
-				s.state.UpdateFileState(path, line.SeekInfo)
-				s.logger.Info().Msg(line.Text)
+				s.state.UpdateFileSeekInfo(path, &line.SeekInfo)
 
 				s.makeChange()
 			}
@@ -302,11 +315,11 @@ func (s *Watcher) statePersister(ctx context.Context, wg *sync.WaitGroup) error 
 					return err
 				}
 			}
-		case <-s.changes:
+		case <-s.change:
 			if s.state.GetChangesNumber() > dictionary.FlushChangesNumber {
 				err := s.stateManager.SaveState(s.state.FlushChanges())
 				if err != nil {
-					s.logger.Err(err).Msg("save state by changes number")
+					s.logger.Err(err).Msg("save state by change number")
 
 					return err
 				}
@@ -314,6 +327,26 @@ func (s *Watcher) statePersister(ctx context.Context, wg *sync.WaitGroup) error 
 
 		case <-ctx.Done():
 			return nil
+		}
+	}
+}
+
+func (s *Watcher) esSendDispatcher(ctx context.Context, wg *sync.WaitGroup) {
+	s.logger.Info().Msg("start es send dispatcher")
+
+	defer s.logger.Info().Msg("stop es send dispatcher")
+	defer wg.Done()
+
+	for {
+		select {
+		case <-time.After(time.Duration(s.cfg.ES.FlushInterval) * time.Millisecond):
+			s.sendToESByTimer()
+		case <-s.hasEvent:
+			s.sendToESByLimit()
+		case <-ctx.Done():
+			s.sendToESRemainingEvents()
+
+			return
 		}
 	}
 }
@@ -326,80 +359,82 @@ func (s *Watcher) esSender(ctx context.Context, wg *sync.WaitGroup) error {
 
 	for {
 		select {
-		case <-time.After(time.Duration(s.cfg.ES.FlushInterval) * time.Millisecond):
-			err := s.sendToESByTimer()
-			if err != nil {
-				return err
-			}
-		case <-s.hasLog:
-			err := s.sendToESByLimit()
+		case events := <-s.esEvents:
+			err := s.esCli.SendEvents(events)
+
+			s.logger.Err(err).Int("num", len(events)).Msg("send events to es")
+
 			if err != nil {
 				return err
 			}
 		case <-ctx.Done():
-			s.logger.Warn().Msg("es sender ctx done")
+			for len(s.esEvents) > 0 {
+				events := <-s.esEvents
 
-			logs := []*tail.Line{}
+				err := s.esCli.SendEvents(events)
 
-			for len(s.logs) > 0 {
-				logs = append(logs, <-s.logs)
+				s.logger.Err(err).Int("num", len(events)).Msg("send remaining event to es before shutting down")
 			}
 
-			if len(logs) == 0 {
-				return nil
-			}
-
-			err := s.esCli.SendEvents(logs)
-
-			s.logger.Err(err).Int("num", len(logs)).Msg("send remaining logs to es before shutting down")
-
-			return err
+			return nil
 		}
 	}
 }
 
-func (s *Watcher) sendToESByLimit() error {
-	if len(s.logs) < dictionary.FlushLogsNumber {
-		return nil
+func (s *Watcher) sendToESByLimit() {
+	if len(s.event) < dictionary.FlushLogsNumber {
+		return
 	}
 
-	logs := []*tail.Line{}
+	events := []*entity.Event{}
 
 	for i := 0; i < dictionary.FlushLogsNumber; i++ {
-		logs = append(logs, <-s.logs)
+		events = append(events, <-s.event)
 	}
 
-	err := s.esCli.SendEvents(logs)
+	s.esEvents <- events
 
-	s.logger.Err(err).
-		Int("num", len(logs)).
-		Int("num remaining", len(s.logs)).
-		Msg("flushed to es by logs number limit")
-
-	return err
+	s.logger.Debug().
+		Int("num", len(events)).
+		Int("num remaining", len(s.event)).
+		Msg("flushed event to es senders by event number limit")
 }
 
-func (s *Watcher) sendToESByTimer() error {
-	num := len(s.logs)
+func (s *Watcher) sendToESByTimer() {
+	num := len(s.event)
 
 	if num == 0 {
-		return nil
+		return
 	}
 
-	logs := []*tail.Line{}
+	events := []*entity.Event{}
 
 	for i := 0; i < num; i++ {
-		logs = append(logs, <-s.logs)
+		events = append(events, <-s.event)
 	}
 
-	err := s.esCli.SendEvents(logs)
+	s.esEvents <- events
 
-	s.logger.Err(err).
-		Int("num", len(logs)).
-		Int("num remaining", len(s.logs)).
-		Msg("flushed to es by timer")
+	s.logger.Warn().
+		Int("num", len(events)).
+		Int("num remaining", len(s.event)).
+		Msg("flushed event to es senders by timer")
+}
 
-	return err
+func (s *Watcher) sendToESRemainingEvents() {
+	events := []*entity.Event{}
+
+	if len(s.event) == 0 {
+		return
+	}
+
+	for len(s.event) > 0 {
+		events = append(events, <-s.event)
+	}
+
+	s.esEvents <- events
+
+	s.logger.Warn().Int("num", len(events)).Msg("send remaining event to es senders before shutting down")
 }
 
 func (s *Watcher) syncState(ctx context.Context, wg *sync.WaitGroup) error {
@@ -444,23 +479,38 @@ func (s *Watcher) syncState(ctx context.Context, wg *sync.WaitGroup) error {
 }
 
 func (s *Watcher) makeChange() {
-	if len(s.changes) == dictionary.FlushChangesChannelSize {
+	if len(s.change) == dictionary.FlushChangesChannelSize {
 		return
 	}
 
-	s.changes <- true
+	s.change <- true
 }
 
-func (s *Watcher) addLogToBuffer(log *tail.Line) {
-	if len(s.logs) == dictionary.LogsChannelSize {
+func (s *Watcher) addLogToBuffer(event *entity.Event) {
+	if len(s.event) == dictionary.LogsChannelSize {
 		s.logger.Err(dictionary.ErrChannelOverflowed).Msg(dictionary.ErrChannelOverflowed.Error())
 
 		return
 	}
 
-	s.logs <- log
+	s.event <- event
 
-	if len(s.hasLog) != dictionary.LogsChannelSize {
-		s.hasLog <- true
+	if len(s.hasEvent) != dictionary.LogsChannelSize {
+		s.hasEvent <- true
+	}
+}
+
+func (s *Watcher) parseK8sMeta(path string) *entity.Meta {
+	matches := s.k8sRegexp.FindAllStringSubmatch(path, -1)
+
+	if matches == nil {
+		return &entity.Meta{}
+	}
+
+	return &entity.Meta{
+		PodName:       matches[0][1],
+		Namespace:     matches[0][2],
+		ContainerName: matches[0][3],
+		ContainerID:   matches[0][4],
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/nxadm/tail"
 	"github.com/rs/zerolog"
 	uuid "github.com/satori/go.uuid"
 	"github.com/soulgarden/logfowd/conf"
@@ -26,13 +25,13 @@ func NewESCli(cfg *conf.Config, logger *zerolog.Logger) *Cli {
 	return &Cli{cfg: cfg, httpCli: &fasthttp.Client{}, logger: logger}
 }
 
-func (s *Cli) SendEvents(rows []*tail.Line) error {
+func (s *Cli) SendEvents(events []*entity.Event) error {
 	req := fasthttp.AcquireRequest()
 	resp := fasthttp.AcquireResponse()
 
 	var buf bytes.Buffer
 
-	for _, log := range rows {
+	for _, event := range events {
 		marshalled, err := json.Marshal(&entity.IndexRequest{
 			IndexRequestBody: &entity.IndexRequestBody{
 				ID: uuid.NewV4().String(),
@@ -46,8 +45,12 @@ func (s *Cli) SendEvents(rows []*tail.Line) error {
 		buf.Write([]byte("\n"))
 
 		marshalled, err = json.Marshal(&entity.FieldsBody{
-			Message:   log.Text,
-			Timestamp: log.Time,
+			Message:       event.Message,
+			Timestamp:     event.Time,
+			PodName:       event.PodName,
+			Namespace:     event.Namespace,
+			ContainerName: event.ContainerName,
+			ContainerID:   event.ContainerID,
 		})
 		if err != nil {
 			return err
