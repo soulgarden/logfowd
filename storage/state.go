@@ -3,20 +3,27 @@ package storage
 import (
 	"sync"
 
+	"github.com/soulgarden/logfowd/dictionary"
+
 	"github.com/nxadm/tail"
 	"github.com/soulgarden/logfowd/entity"
 )
 
 type State struct {
-	mx            sync.RWMutex
-	files         map[string]*entity.State
-	changesNumber uint64
+	mx     sync.RWMutex
+	files  map[string]*entity.State
+	change chan struct{}
 }
 
 func NewState() *State {
 	return &State{
-		files: make(map[string]*entity.State),
+		files:  make(map[string]*entity.State),
+		change: make(chan struct{}, dictionary.FlushChangesChannelSize),
 	}
+}
+
+func (s *State) ListenChange() <-chan struct{} {
+	return s.change
 }
 
 func (s *State) AddFile(path string, state *entity.State) {
@@ -25,7 +32,7 @@ func (s *State) AddFile(path string, state *entity.State) {
 
 	s.files[path] = state
 
-	s.changesNumber++
+	s.makeChange()
 }
 
 func (s *State) GetFileState(path string) *entity.State {
@@ -40,7 +47,7 @@ func (s *State) DeleteFile(path string) {
 	defer s.mx.Unlock()
 
 	delete(s.files, path)
-	s.changesNumber++
+	s.makeChange()
 }
 
 func (s *State) UpdateFileSeekInfo(path string, seekInfo *tail.SeekInfo) {
@@ -48,7 +55,7 @@ func (s *State) UpdateFileSeekInfo(path string, seekInfo *tail.SeekInfo) {
 	defer s.mx.Unlock()
 
 	s.files[path].SeekInfo = seekInfo
-	s.changesNumber++
+	s.makeChange()
 }
 
 func (s *State) IsFileExists(path string) bool {
@@ -62,18 +69,13 @@ func (s *State) IsFileExists(path string) bool {
 	return false
 }
 
-func (s *State) GetChangesNumber() uint64 {
-	s.mx.RLock()
-	defer s.mx.RUnlock()
-
-	return s.changesNumber
-}
-
-func (s *State) FlushChanges() map[string]*entity.State {
+func (s *State) FlushChanges(number int) map[string]*entity.State {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 
-	s.changesNumber = 0
+	for i := 0; i < number; i++ {
+		<-s.change
+	}
 
 	files := make(map[string]*entity.State, len(s.files))
 
@@ -88,7 +90,13 @@ func (s *State) Load(state map[string]*entity.State) {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 
-	s.changesNumber = 0
-
 	s.files = state
+}
+
+func (s *State) makeChange() {
+	if len(s.change) == cap(s.change) {
+		return
+	}
+
+	s.change <- struct{}{}
 }

@@ -3,9 +3,8 @@ package dictionary
 const (
 	DumpFilePermissions     = 0o600
 	FlushChangesNumber      = 1024
-	FlushChangesChannelSize = FlushChangesNumber
+	FlushChangesChannelSize = FlushChangesNumber * 2
 	FlushLogsNumber         = 1024
-	LogsChannelSize         = 32768
 )
 
 // nolint: lll

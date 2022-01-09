@@ -24,6 +24,7 @@ func (s *Manager) ListenSignal() (context.Context, chan<- os.Signal) {
 
 	signal.Notify(interrupt, os.Interrupt)
 	signal.Notify(interrupt, syscall.SIGTERM)
+	signal.Notify(interrupt, syscall.SIGINT)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -39,6 +40,12 @@ func (s *Manager) ListenSignal() (context.Context, chan<- os.Signal) {
 		s.logger.Warn().Msg("killed by shutdown timeout")
 
 		os.Exit(1)
+	}()
+
+	go func() {
+		<-ctx.Done()
+
+		s.logger.Debug().Msg("start graceful shutting down")
 	}()
 
 	return ctx, interrupt

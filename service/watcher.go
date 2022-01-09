@@ -10,6 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
+	"github.com/soulgarden/logfowd/dictionary"
+
 	"github.com/soulgarden/logfowd/entity"
 
 	"github.com/nxadm/tail"
@@ -17,7 +20,6 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/soulgarden/logfowd/conf"
-	"github.com/soulgarden/logfowd/dictionary"
 )
 
 const primaryGoroutinesNum = 5
@@ -26,10 +28,9 @@ type Watcher struct {
 	cfg          *conf.Config
 	addCh        chan string
 	delCh        chan string
-	change       chan bool
 	event        chan *entity.Event
 	esEvents     chan []*entity.Event
-	hasEvent     chan bool
+	hasEvent     chan struct{}
 	stateManager *State
 	esCli        *Cli
 	k8sRegexp    *regexp.Regexp
@@ -42,10 +43,9 @@ func NewWatcher(cfg *conf.Config, stateManager *State, esCli *Cli, logger *zerol
 		cfg:          cfg,
 		addCh:        make(chan string, 1),
 		delCh:        make(chan string, 1),
-		change:       make(chan bool, dictionary.FlushChangesChannelSize),
-		event:        make(chan *entity.Event, dictionary.LogsChannelSize),
+		event:        make(chan *entity.Event, cfg.ES.Workers*dictionary.SendBatchesNum*dictionary.FlushLogsNumber),
 		esEvents:     make(chan []*entity.Event, cfg.ES.Workers*dictionary.SendBatchesNum),
-		hasEvent:     make(chan bool, dictionary.LogsChannelSize),
+		hasEvent:     make(chan struct{}, cfg.ES.Workers*dictionary.SendBatchesNum*dictionary.FlushLogsNumber),
 		stateManager: stateManager,
 		esCli:        esCli,
 		k8sRegexp:    regexp.MustCompile(dictionary.K8sRegexp),
@@ -113,7 +113,7 @@ func (s *Watcher) Start(ctx context.Context) {
 
 	wg.Wait()
 
-	s.logger.Err(s.stateManager.SaveState(s.state.FlushChanges())).Msg("save state before shutdown")
+	s.logger.Err(s.stateManager.SaveState(s.state.FlushChanges(0))).Msg("save state before shutdown")
 }
 
 func (s *Watcher) watchForLogFiles(ctx context.Context, wg *sync.WaitGroup) error {
@@ -122,17 +122,63 @@ func (s *Watcher) watchForLogFiles(ctx context.Context, wg *sync.WaitGroup) erro
 	defer s.logger.Info().Msg("stop log files watcher")
 	defer wg.Done()
 
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		s.logger.Err(err).Msg("new watcher")
+	}
+
+	defer watcher.Close()
+
+	for _, path := range s.cfg.LogsPath {
+		err := s.list(path)
+		if err != nil {
+			s.logger.Err(err).Msg("list event dir")
+
+			return err
+		}
+	}
+
+	for _, path := range s.cfg.LogsPath {
+		err = watcher.Add(path)
+		if err != nil {
+			s.logger.Err(err).Msg("new watcher")
+
+			return err
+		}
+	}
+
 	for {
 		select {
-		case <-time.After(dictionary.CheckLogsFilesInterval):
-			for _, path := range s.cfg.LogsPath {
-				err := s.list(path)
-				if err != nil {
-					s.logger.Err(err).Msg("list event dir")
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return nil
+			}
 
-					return err
+			if event.Op&fsnotify.Create == fsnotify.Create {
+				info, err := os.Stat(event.Name)
+				if err != nil {
+					s.logger.Err(err).Str("path", event.Name).Msg("stat file/dir")
+				}
+
+				if info.IsDir() {
+					err = watcher.Add(event.Name)
+					if err != nil {
+						s.logger.Err(err).Msg("new watcher")
+
+						return err
+					}
+				} else if event.Name[len(event.Name)-4:] == ".log" {
+					if !s.state.IsFileExists(event.Name) {
+						s.addCh <- event.Name
+					}
 				}
 			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return nil
+			}
+
+			s.logger.Err(err).Msg("watcher received error")
 		case <-ctx.Done():
 			return nil
 		}
@@ -181,8 +227,6 @@ func (s *Watcher) listenAddFile(ctx context.Context, wg *sync.WaitGroup) error {
 					Meta:     s.parseK8sMeta(path),
 				})
 
-				s.makeChange()
-
 				wg.Add(1)
 
 				go func(c context.Context, wg *sync.WaitGroup, path string) {
@@ -220,8 +264,6 @@ func (s *Watcher) listenDelFile(ctx context.Context, wg *sync.WaitGroup) {
 
 			s.state.DeleteFile(path)
 
-			s.makeChange()
-
 		case <-ctx.Done():
 			for len(s.delCh) > 0 {
 				path := <-s.delCh
@@ -229,8 +271,6 @@ func (s *Watcher) listenDelFile(ctx context.Context, wg *sync.WaitGroup) {
 				s.logger.Warn().Str("path", path).Msg("del path from listen")
 
 				s.state.DeleteFile(path)
-
-				s.makeChange()
 			}
 
 			close(s.delCh)
@@ -276,8 +316,6 @@ func (s *Watcher) tailFile(ctx context.Context, wg *sync.WaitGroup, path string)
 
 			s.state.UpdateFileSeekInfo(path, &line.SeekInfo)
 
-			s.makeChange()
-
 			s.addLogToBuffer(entity.NewEvent(line, fileState.Meta))
 		case <-ctx.Done():
 			err = t.Stop()
@@ -289,8 +327,6 @@ func (s *Watcher) tailFile(ctx context.Context, wg *sync.WaitGroup, path string)
 				line := <-t.Lines
 
 				s.state.UpdateFileSeekInfo(path, &line.SeekInfo)
-
-				s.makeChange()
 			}
 
 			return nil
@@ -307,17 +343,17 @@ func (s *Watcher) statePersister(ctx context.Context, wg *sync.WaitGroup) error 
 	for {
 		select {
 		case <-time.After(dictionary.FlushStateInterval):
-			if s.state.GetChangesNumber() > 0 {
-				err := s.stateManager.SaveState(s.state.FlushChanges())
+			if len(s.state.ListenChange()) > 0 {
+				err := s.stateManager.SaveState(s.state.FlushChanges(len(s.state.ListenChange())))
 				if err != nil {
 					s.logger.Err(err).Msg("save state by timer")
 
 					return err
 				}
 			}
-		case <-s.change:
-			if s.state.GetChangesNumber() > dictionary.FlushChangesNumber {
-				err := s.stateManager.SaveState(s.state.FlushChanges())
+		case <-s.state.ListenChange():
+			if len(s.state.ListenChange()) >= dictionary.FlushChangesNumber {
+				err := s.stateManager.SaveState(s.state.FlushChanges(len(s.state.ListenChange())))
 				if err != nil {
 					s.logger.Err(err).Msg("save state by change number")
 
@@ -478,25 +514,19 @@ func (s *Watcher) syncState(ctx context.Context, wg *sync.WaitGroup) error {
 	return nil
 }
 
-func (s *Watcher) makeChange() {
-	if len(s.change) == dictionary.FlushChangesChannelSize {
-		return
-	}
-
-	s.change <- true
-}
-
 func (s *Watcher) addLogToBuffer(event *entity.Event) {
-	if len(s.event) == dictionary.LogsChannelSize {
-		s.logger.Err(dictionary.ErrChannelOverflowed).Msg(dictionary.ErrChannelOverflowed.Error())
+	if len(s.event) == cap(s.event) {
+		s.logger.
+			Err(dictionary.ErrChannelOverflowed).
+			Msg("logs channel overflowed, new logs will be dropped")
 
 		return
 	}
 
 	s.event <- event
 
-	if len(s.hasEvent) != dictionary.LogsChannelSize {
-		s.hasEvent <- true
+	if len(s.hasEvent) != cap(s.hasEvent) {
+		s.hasEvent <- struct{}{}
 	}
 }
 

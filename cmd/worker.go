@@ -32,12 +32,6 @@ func newWorker() *cobra.Command {
 
 			ctx, _ := cmdManager.ListenSignal()
 
-			go func() {
-				<-ctx.Done()
-
-				logger.Debug().Msg("start graceful shutting down")
-			}()
-
 			service.NewWatcher(
 				cfg,
 				service.NewState(cfg, &logger),
