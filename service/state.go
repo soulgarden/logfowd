@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"io/ioutil"
 
-	"github.com/soulgarden/logfowd/entity"
+	"github.com/soulgarden/logfowd/service/file"
 
 	"github.com/rs/zerolog"
 	"github.com/soulgarden/logfowd/conf"
@@ -20,7 +20,7 @@ func NewState(cfg *conf.Config, logger *zerolog.Logger) *State {
 	return &State{cfg: cfg, logger: logger}
 }
 
-func (s *State) SaveState(state map[string]*entity.State) error {
+func (s *State) SaveState(state map[string]*file.File) error {
 	if len(state) == 0 {
 		return nil
 	}
@@ -33,8 +33,8 @@ func (s *State) SaveState(state map[string]*entity.State) error {
 	return ioutil.WriteFile(s.cfg.StatePath, marshalled, dictionary.DumpFilePermissions)
 }
 
-func (s *State) LoadState() (map[string]*entity.State, error) {
-	var state map[string]*entity.State
+func (s *State) LoadState() (map[string]*file.File, error) {
+	var state map[string]*file.File
 
 	data, err := ioutil.ReadFile(s.cfg.StatePath)
 	if err != nil {
