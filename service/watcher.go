@@ -73,6 +73,12 @@ func (s *Watcher) Start(ctx context.Context) {
 		})
 	}
 
+	if err := s.syncFiles(ctx, g); err != nil {
+		s.logger.Err(err).Msg("sync files")
+
+		return
+	}
+
 	g.Go(func() error {
 		return s.watch(ctx, g)
 	})
@@ -84,6 +90,7 @@ func (s *Watcher) Start(ctx context.Context) {
 	s.logger.Err(s.stateManager.SaveState(s.state.FlushChanges(0))).Msg("save state before shutdown")
 }
 
+// nolint: funlen
 func (s *Watcher) watch(ctx context.Context, g *errgroup.Group) error {
 	s.logger.Debug().Msg("start log files watcher")
 
@@ -98,23 +105,13 @@ func (s *Watcher) watch(ctx context.Context, g *errgroup.Group) error {
 
 	defer watcher.Close()
 
-	for _, path := range s.cfg.LogsPath {
-		err := s.list(ctx, g, path)
-		if err != nil {
-			s.logger.Err(err).Msg("list event dir")
+	if err := s.addWatchers(watcher); err != nil {
+		s.logger.Err(err).Msg("add watchers")
 
-			return err
-		}
+		return err
 	}
 
-	for _, path := range s.cfg.LogsPath {
-		err = watcher.Add(path)
-		if err != nil {
-			s.logger.Err(err).Msg("new watcher")
-
-			return err
-		}
-	}
+	var oldRenamedPath string
 
 	for {
 		select {
@@ -125,27 +122,49 @@ func (s *Watcher) watch(ctx context.Context, g *errgroup.Group) error {
 				return dictionary.ErrChannelClosed
 			}
 
+			//s.logger.Warn().Msg(event.String())
+
+			if event.Name[len(event.Name)-4:] != ".log" {
+				continue
+			}
+
 			switch {
 			case event.Op&fsnotify.Create == fsnotify.Create:
-				if err := s.fileCreated(ctx, g, watcher, event.Name); err != nil {
-					s.logger.Err(err).Msg("file created")
+				if oldRenamedPath != "" {
+					s.logger.Warn().
+						Str("before path", oldRenamedPath).
+						Str("after path", event.Name).
+						Msg("file renamed")
 
-					return err
+					s.fileRenamed(oldRenamedPath, event.Name)
+					oldRenamedPath = ""
+
+					continue
 				}
-			case event.Op&fsnotify.Remove == fsnotify.Remove:
-				if err := s.fileRenamed(event.Name); err != nil {
-					s.logger.Err(err).Msg("file created")
+
+				if err := s.fileCreated(ctx, g, watcher, event.Name); err != nil {
+					s.logger.Err(err).Str("path", event.Name).Msg("file created")
 
 					return err
 				}
 			case event.Op&fsnotify.Rename == fsnotify.Rename:
+				s.logger.Warn().Str("old path", event.Name).Msg("file renamed, save old path")
+
+				oldRenamedPath = event.Name
+			case event.Op&fsnotify.Remove == fsnotify.Remove:
 				if err := s.fileDeleted(event.Name); err != nil {
-					s.logger.Err(err).Msg("file created")
+					s.logger.Err(err).Str("path", event.Name).Msg("file created")
 
 					return err
 				}
 			case event.Op&fsnotify.Write == fsnotify.Write:
 				f := s.state.GetFile(event.Name)
+
+				if f == nil {
+					s.logger.Warn().Str("path", event.Name).Msg("file not exist in storage")
+
+					continue
+				}
 
 				err := f.Read()
 				if err != nil {
@@ -171,6 +190,75 @@ func (s *Watcher) watch(ctx context.Context, g *errgroup.Group) error {
 	}
 }
 
+func (s *Watcher) syncFiles(ctx context.Context, g *errgroup.Group) error {
+	for _, path := range s.cfg.LogsPath {
+		err := s.list(ctx, g, path)
+		if err != nil {
+			s.logger.Err(err).Msg("list event dir")
+
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Watcher) addWatchers(watcher *fsnotify.Watcher) error {
+	for _, path := range s.cfg.LogsPath {
+		err := watcher.Add(path)
+		if err != nil {
+			s.logger.Err(err).Msg("new watcher")
+
+			return err
+		}
+
+		err = s.addWatchersRecursive(watcher, path)
+
+		s.logger.Err(err).Msg("walk dir")
+
+		return err
+	}
+
+	return nil
+}
+
+func (s *Watcher) addWatchersRecursive(watcher *fsnotify.Watcher, rootPath string) error {
+	err := filepath.WalkDir(rootPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			s.logger.Err(err).Str("path", path).Msg("list dir")
+
+			return err
+		}
+
+		if path == rootPath {
+			return nil
+		}
+
+		if d.IsDir() {
+			s.logger.Err(err).Str("path", path).Str("name", d.Name()).Msg("list dir")
+
+			err = watcher.Add(path)
+			if err != nil {
+				s.logger.Err(err).Msg("new watcher")
+
+				return err
+			}
+
+			if err := s.addWatchersRecursive(watcher, path); err != nil {
+				s.logger.Err(err).Str("path", path).Msg("add watchers recursive")
+
+				return err
+			}
+		}
+
+		return err
+	})
+
+	s.logger.Err(err).Str("path", rootPath).Msg("walk dir")
+
+	return err
+}
+
 func (s *Watcher) fileCreated(ctx context.Context, g *errgroup.Group, watcher *fsnotify.Watcher, path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -188,36 +276,35 @@ func (s *Watcher) fileCreated(ctx context.Context, g *errgroup.Group, watcher *f
 		return err
 	}
 
-	if path[len(path)-4:] == ".log" {
-		if !s.state.IsFileExists(path) {
-			f := s.addFile(path)
+	if !s.state.IsFileExists(path) {
+		f := s.addFile(path)
 
-			g.Go(func() error {
-				return s.listenLine(ctx, f)
-			})
+		g.Go(func() error {
+			return s.listenLine(ctx, f)
+		})
 
-			err = f.Read()
-			if err != nil {
-				s.logger.Err(err).Str("path", path).Msg("read file")
-			}
-
-			return err
+		err = f.Read()
+		if err != nil {
+			s.logger.Err(err).Str("path", path).Msg("read file")
 		}
+
+		return err
 	}
 
 	return nil
 }
 
-func (s *Watcher) fileRenamed(path string) error {
-	err := s.deleteFile(path)
-	if err != nil {
-		s.logger.Err(err).Str("path", path).Msg("read line")
-	}
-
-	return err
+func (s *Watcher) fileRenamed(oldPath, newPath string) {
+	s.state.RenameFile(oldPath, newPath)
 }
 
 func (s *Watcher) fileDeleted(path string) error {
+	if f := s.state.GetFile(path); f == nil {
+		s.logger.Warn().Str("path", path).Msg("file not exist in storage, was it a folder?")
+
+		return nil
+	}
+
 	err := s.deleteFile(path)
 	if err != nil {
 		s.logger.Err(err).Str("path", path).Msg("read line")
@@ -241,6 +328,11 @@ func (s *Watcher) deleteFile(path string) error {
 	s.logger.Info().Str("path", path).Msg("delete file")
 
 	f := s.state.GetFile(path)
+	if f != nil {
+		s.logger.Info().Str("path", path).Msg("file not found")
+
+		return nil
+	}
 
 	err := f.Close()
 	s.logger.Err(err).Str("path", path).Msg("close file")

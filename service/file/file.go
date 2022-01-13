@@ -86,10 +86,6 @@ func (s *File) readLine() error {
 	s.CurLine++
 	s.Offset = offset - int64(s.reader.Buffered())
 
-	//if len(s.lines) == cap(s.lines) {
-	//	return dictionary.ErrChannelOverflowed
-	//}
-
 	s.lines <- &entity.Line{
 		Num:  s.CurLine,
 		Pos:  s.Offset,
