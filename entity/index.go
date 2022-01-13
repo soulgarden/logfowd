@@ -20,5 +20,5 @@ type FieldsBody struct {
 	PodName       string    `json:"pod_name"`
 	Namespace     string    `json:"namespace"`
 	ContainerName string    `json:"container_name"`
-	ContainerID   string    `json:"container_id"`
+	PodID         string    `json:"pod_id"`
 }

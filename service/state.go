@@ -21,10 +21,6 @@ func NewState(cfg *conf.Config, logger *zerolog.Logger) *State {
 }
 
 func (s *State) SaveState(state map[string]*file.File) error {
-	if len(state) == 0 {
-		return nil
-	}
-
 	marshalled, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -33,7 +29,7 @@ func (s *State) SaveState(state map[string]*file.File) error {
 	return ioutil.WriteFile(s.cfg.StatePath, marshalled, dictionary.DumpFilePermissions)
 }
 
-func (s *State) LoadState() (map[string]*file.File, error) {
+func (s *State) LoadFiles() (map[string]*file.File, error) {
 	var state map[string]*file.File
 
 	data, err := ioutil.ReadFile(s.cfg.StatePath)

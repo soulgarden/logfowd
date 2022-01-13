@@ -18,7 +18,7 @@ func NewEvent(line *Line, meta *Meta) *Event {
 			PodName:       meta.PodName,
 			Namespace:     meta.Namespace,
 			ContainerName: meta.ContainerName,
-			ContainerID:   meta.ContainerID,
+			PodID:         meta.PodID,
 		},
 	}
 }

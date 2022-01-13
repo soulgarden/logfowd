@@ -1,8 +1,8 @@
 package entity
 
 type Meta struct {
-	PodName       string
 	Namespace     string
+	PodName       string
+	PodID         string
 	ContainerName string
-	ContainerID   string
 }

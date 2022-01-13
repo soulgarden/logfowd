@@ -50,7 +50,7 @@ func (s *Cli) SendEvents(events []*entity.Event) error {
 			PodName:       event.PodName,
 			Namespace:     event.Namespace,
 			ContainerName: event.ContainerName,
-			ContainerID:   event.ContainerID,
+			PodID:         event.PodID,
 		})
 		if err != nil {
 			return err
