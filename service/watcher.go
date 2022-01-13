@@ -3,31 +3,27 @@ package service
 import (
 	"context"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sync"
 	"time"
+
+	"github.com/soulgarden/logfowd/service/file"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/soulgarden/logfowd/dictionary"
 
 	"github.com/soulgarden/logfowd/entity"
 
-	"github.com/nxadm/tail"
 	"github.com/soulgarden/logfowd/storage"
 
 	"github.com/rs/zerolog"
 	"github.com/soulgarden/logfowd/conf"
+	"golang.org/x/sync/errgroup"
 )
-
-const primaryGoroutinesNum = 5
 
 type Watcher struct {
 	cfg          *conf.Config
-	addCh        chan string
-	delCh        chan string
 	event        chan *entity.Event
 	esEvents     chan []*entity.Event
 	hasEvent     chan struct{}
@@ -41,140 +37,135 @@ type Watcher struct {
 func NewWatcher(cfg *conf.Config, stateManager *State, esCli *Cli, logger *zerolog.Logger) *Watcher {
 	return &Watcher{
 		cfg:          cfg,
-		addCh:        make(chan string, 1),
-		delCh:        make(chan string, 1),
 		event:        make(chan *entity.Event, cfg.ES.Workers*dictionary.SendBatchesNum*dictionary.FlushLogsNumber),
 		esEvents:     make(chan []*entity.Event, cfg.ES.Workers*dictionary.SendBatchesNum),
 		hasEvent:     make(chan struct{}, cfg.ES.Workers*dictionary.SendBatchesNum*dictionary.FlushLogsNumber),
 		stateManager: stateManager,
 		esCli:        esCli,
-		k8sRegexp:    regexp.MustCompile(dictionary.K8sRegexp),
+		k8sRegexp:    regexp.MustCompile(dictionary.K8sPodsRegexp),
 		state:        storage.NewState(),
 		logger:       logger,
 	}
 }
 
 func (s *Watcher) Start(ctx context.Context) {
-	var wg sync.WaitGroup
+	g, ctx := errgroup.WithContext(ctx)
 
-	c, cancel := context.WithCancel(ctx)
-
-	if err := s.syncState(c, &wg); err != nil {
+	if err := s.syncState(ctx, g); err != nil {
 		s.logger.Err(err).Msg("sync state")
-
-		cancel()
 
 		return
 	}
 
-	wg.Add(primaryGoroutinesNum + s.cfg.ES.Workers)
+	g.Go(func() error {
+		return s.statePersister(ctx)
+	})
 
-	go func() {
-		err := s.statePersister(c, &wg)
-		if err != nil {
-			s.logger.Err(err).Msg("state persister")
-
-			cancel()
-		}
-	}()
-
-	go func() {
-		err := s.listenAddFile(c, &wg)
-		if err != nil {
-			s.logger.Err(err).Msg("listen add file")
-
-			cancel()
-		}
-	}()
-
-	go s.esSendDispatcher(c, &wg)
+	g.Go(func() error {
+		return s.esSendDispatcher(ctx)
+	})
 
 	for i := 0; i < s.cfg.ES.Workers; i++ {
-		go func(c context.Context, wg *sync.WaitGroup) {
-			err := s.esSender(c, wg)
-			if err != nil {
-				s.logger.Err(err).Msg("es sender")
+		i := i
 
-				cancel()
-			}
-		}(c, &wg)
+		g.Go(func() error {
+			return s.esSender(ctx, i)
+		})
 	}
 
-	go s.listenDelFile(c, &wg)
+	if err := s.syncFiles(ctx, g); err != nil {
+		s.logger.Err(err).Msg("sync files")
 
-	go func() {
-		err := s.watchForLogFiles(c, &wg)
-		if err != nil {
-			s.logger.Err(err).Msg("watch for log files")
+		return
+	}
 
-			cancel()
-		}
-	}()
+	g.Go(func() error {
+		return s.watch(ctx, g)
+	})
 
-	wg.Wait()
+	err := g.Wait()
+
+	s.logger.Err(err).Msg("wait goroutines")
 
 	s.logger.Err(s.stateManager.SaveState(s.state.FlushChanges(0))).Msg("save state before shutdown")
 }
 
-func (s *Watcher) watchForLogFiles(ctx context.Context, wg *sync.WaitGroup) error {
-	s.logger.Info().Msg("start log files watcher")
+// nolint: funlen
+func (s *Watcher) watch(ctx context.Context, g *errgroup.Group) error {
+	s.logger.Debug().Msg("start log files watcher")
 
-	defer s.logger.Info().Msg("stop log files watcher")
-	defer wg.Done()
+	defer s.logger.Debug().Msg("stop log files watcher")
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		s.logger.Err(err).Msg("new watcher")
+
+		return err
 	}
 
 	defer watcher.Close()
 
-	for _, path := range s.cfg.LogsPath {
-		err := s.list(path)
-		if err != nil {
-			s.logger.Err(err).Msg("list event dir")
+	if err := s.addWatchers(watcher); err != nil {
+		s.logger.Err(err).Msg("add watchers")
 
-			return err
-		}
+		return err
 	}
 
-	for _, path := range s.cfg.LogsPath {
-		err = watcher.Add(path)
-		if err != nil {
-			s.logger.Err(err).Msg("new watcher")
-
-			return err
-		}
-	}
+	var oldRenamedPath string
 
 	for {
 		select {
 		case event, ok := <-watcher.Events:
 			if !ok {
-				return nil
+				s.logger.Err(dictionary.ErrChannelClosed).Msg("watcher events channel closed")
+
+				return dictionary.ErrChannelClosed
 			}
 
-			if event.Op&fsnotify.Create == fsnotify.Create {
-				info, err := os.Stat(event.Name)
-				if err != nil {
-					s.logger.Err(err).Str("path", event.Name).Msg("stat file/dir")
+			switch {
+			case event.Op&fsnotify.Create == fsnotify.Create:
+				if oldRenamedPath != "" {
+					s.logger.Warn().
+						Str("before path", oldRenamedPath).
+						Str("after path", event.Name).
+						Msg("file renamed")
+
+					s.fileRenamed(oldRenamedPath, event.Name)
+					oldRenamedPath = ""
+
+					continue
 				}
 
-				if info.IsDir() {
-					err = watcher.Add(event.Name)
-					if err != nil {
-						s.logger.Err(err).Msg("new watcher")
+				if err := s.created(ctx, g, watcher, event.Name); err != nil {
+					s.logger.Err(err).Str("path", event.Name).Msg("created")
 
-						return err
-					}
-				} else if event.Name[len(event.Name)-4:] == ".log" {
-					if !s.state.IsFileExists(event.Name) {
-						s.addCh <- event.Name
-					}
+					return err
+				}
+			case event.Op&fsnotify.Rename == fsnotify.Rename:
+				if !s.isLogFile(event.Name) {
+					continue
+				}
+
+				s.logger.Warn().Str("old path", event.Name).Msg("file renamed, save old path")
+
+				oldRenamedPath = event.Name
+			case event.Op&fsnotify.Remove == fsnotify.Remove:
+				if err := s.deleted(event.Name); err != nil {
+					s.logger.Err(err).Str("path", event.Name).Msg("deleted")
+
+					return err
+				}
+			case event.Op&fsnotify.Write == fsnotify.Write:
+				if err := s.written(event.Name); err != nil {
+					s.logger.Err(err).Str("path", event.Name).Msg("written")
+
+					return err
 				}
 			}
 		case err, ok := <-watcher.Errors:
 			if !ok {
+				s.logger.Err(err).Msg("watcher error channel closed")
+
 				return nil
 			}
 
@@ -185,7 +176,240 @@ func (s *Watcher) watchForLogFiles(ctx context.Context, wg *sync.WaitGroup) erro
 	}
 }
 
-func (s *Watcher) list(logPath string) error {
+func (s *Watcher) syncFiles(ctx context.Context, g *errgroup.Group) error {
+	for _, path := range s.cfg.LogsPath {
+		err := s.list(ctx, g, path)
+		if err != nil {
+			s.logger.Err(err).Msg("list event dir")
+
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Watcher) addWatchers(watcher *fsnotify.Watcher) error {
+	for _, path := range s.cfg.LogsPath {
+		err := watcher.Add(path)
+		s.logger.Err(err).Str("path", path).Msg("add to watcher")
+
+		if err != nil {
+			return err
+		}
+
+		err = s.addWatchersRecursive(watcher, path)
+
+		s.logger.Err(err).Msg("walk dir")
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Watcher) addWatchersRecursive(watcher *fsnotify.Watcher, rootPath string) error {
+	err := filepath.WalkDir(rootPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			s.logger.Err(err).Str("path", path).Msg("list dir")
+
+			return err
+		}
+
+		if path == rootPath {
+			return nil
+		}
+
+		if d.IsDir() {
+			s.logger.Err(err).Str("path", path).Str("name", d.Name()).Msg("list dir")
+
+			err = watcher.Add(path)
+			s.logger.Err(err).Str("path", path).Msg("add to watcher")
+			if err != nil {
+				return err
+			}
+
+			if err := s.addWatchersRecursive(watcher, path); err != nil {
+				s.logger.Err(err).Str("path", path).Msg("add watchers recursive")
+
+				return err
+			}
+		}
+
+		return err
+	})
+
+	s.logger.Err(err).Str("path", rootPath).Msg("walk dir")
+
+	return err
+}
+
+func (s *Watcher) created(
+	ctx context.Context,
+	g *errgroup.Group,
+	watcher *fsnotify.Watcher,
+	path string,
+) error {
+	info, err := s.statFile(path)
+	if err != nil {
+		return err
+	}
+
+	info.Size()
+
+	if info.IsDir() {
+		err = watcher.Add(path)
+		s.logger.Err(err).Str("path", path).Msg("add to watcher")
+
+		if err != nil {
+			return err
+		}
+
+		err := s.addWatchersRecursive(watcher, path)
+		if err != nil {
+			s.logger.Err(err).Str("path", path).Msg("new watcher")
+		}
+
+		return err
+	}
+
+	if !s.isLogFile(path) {
+		return nil
+	}
+
+	if !s.state.IsFileExists(path) {
+		f, err := s.addFile(path)
+		if err != nil {
+			return err
+		}
+
+		g.Go(func() error {
+			return s.listenLine(ctx, f)
+		})
+
+		err = f.Read()
+		if err != nil {
+			s.logger.Err(err).Str("path", path).Msg("read file")
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+func (s *Watcher) written(path string) error {
+	if !s.isLogFile(path) {
+		return nil
+	}
+
+	f := s.state.GetFile(path)
+	if f == nil {
+		s.logger.Warn().Str("path", path).Msg("file not exist in storage")
+
+		return nil
+	}
+
+	isTrunc, err := f.IsTruncated()
+	if err != nil {
+		s.logger.Err(err).
+			Str("path", path).
+			Msg("is truncated")
+
+		return err
+	}
+
+	if isTrunc {
+		err = f.Reset()
+		if err != nil {
+			s.logger.Err(err).
+				Str("path", path).
+				Msg("reopen truncated file")
+
+			return err
+		}
+
+		s.logger.Warn().
+			Str("path", path).
+			Int64("offset", f.Offset).
+			Int64("size", f.Size).
+			Msg("file was truncated")
+
+		s.state.SetFile(path, f)
+	}
+
+	err = f.Read()
+	if err != nil {
+		s.logger.Err(err).
+			Str("path", path).
+			Msg("read line")
+	}
+
+	return err
+}
+
+func (s *Watcher) fileRenamed(oldPath, newPath string) {
+	s.state.RenameFile(oldPath, newPath)
+}
+
+func (s *Watcher) deleted(path string) error {
+	if !s.isLogFile(path) {
+		return nil
+	}
+
+	if f := s.state.GetFile(path); f == nil {
+		s.logger.Warn().Str("path", path).Msg("file not exist in storage, was it a folder?")
+
+		return nil
+	}
+
+	err := s.deleteFile(path)
+	if err != nil {
+		s.logger.Err(err).Str("path", path).Msg("read line")
+	}
+
+	return err
+}
+
+func (s *Watcher) addFile(path string) (*file.File, error) {
+	f, err := file.NewFile(path)
+
+	s.logger.Err(err).Str("path", path).Msg("add file")
+
+	if err != nil {
+		return nil, err
+	}
+
+	f.Meta = s.parseK8sMeta(path)
+
+	s.state.SetFile(path, f)
+
+	s.logger.Err(err).Str("path", path).Msg("add file")
+
+	return f, nil
+}
+
+func (s *Watcher) deleteFile(path string) error {
+	s.logger.Info().Str("path", path).Msg("delete file")
+
+	f := s.state.GetFile(path)
+	if f == nil {
+		s.logger.Info().Str("path", path).Msg("file not found in storage")
+
+		return nil
+	}
+
+	err := f.Close()
+	s.logger.Err(err).Str("path", path).Msg("close file")
+
+	s.state.DeleteFile(path)
+
+	return err
+}
+
+func (s *Watcher) list(ctx context.Context, g *errgroup.Group, logPath string) error {
 	err := filepath.WalkDir(logPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			s.logger.Err(err).Str("path", path).Msg("list event dir")
@@ -193,11 +417,32 @@ func (s *Watcher) list(logPath string) error {
 			return err
 		}
 
-		if !d.IsDir() {
-			if d.Name()[len(d.Name())-4:] == ".log" {
-				if !s.state.IsFileExists(path) {
-					s.addCh <- path
+		if !d.IsDir() && s.isLogFile(d.Name()) {
+			if !s.state.IsFileExists(path) {
+				f, err := s.addFile(path)
+				if err != nil {
+					return err
 				}
+
+				err = f.SeekEnd()
+				if err != nil {
+					return err
+				}
+
+				s.state.SetFile(path, f)
+
+				g.Go(func() error {
+					return s.listenLine(ctx, f)
+				})
+
+				g.Go(func() error {
+					err = f.Read()
+					if err != nil {
+						s.logger.Err(err).Str("path", path).Msg("read file")
+					}
+
+					return err
+				})
 			}
 		}
 
@@ -210,140 +455,15 @@ func (s *Watcher) list(logPath string) error {
 	return err
 }
 
-func (s *Watcher) listenAddFile(ctx context.Context, wg *sync.WaitGroup) error {
-	s.logger.Info().Msg("start add file listener")
+func (s *Watcher) statePersister(ctx context.Context) error {
+	s.logger.Debug().Msg("start state persister")
 
-	defer s.logger.Info().Msg("stop add file listener")
-	defer wg.Done()
-
-	errChan := make(chan error)
-
-	go func() {
-		for {
-			select {
-			case path := <-s.addCh:
-				s.state.AddFile(path, &entity.State{
-					SeekInfo: nil,
-					Meta:     s.parseK8sMeta(path),
-				})
-
-				wg.Add(1)
-
-				go func(c context.Context, wg *sync.WaitGroup, path string) {
-					err := s.tailFile(c, wg, path)
-					if err != nil {
-						errChan <- err
-					}
-				}(ctx, wg, path)
-
-			case <-ctx.Done():
-				close(s.addCh)
-
-				errChan <- nil
-
-				return
-			}
-		}
-	}()
-
-	err := <-errChan
-
-	return err
-}
-
-func (s *Watcher) listenDelFile(ctx context.Context, wg *sync.WaitGroup) {
-	s.logger.Info().Msg("start del file listener")
-
-	defer s.logger.Info().Msg("stop del file listener")
-	defer wg.Done()
-
-	for {
-		select {
-		case path := <-s.delCh:
-			s.logger.Warn().Str("path", path).Msg("del path from listen")
-
-			s.state.DeleteFile(path)
-
-		case <-ctx.Done():
-			for len(s.delCh) > 0 {
-				path := <-s.delCh
-
-				s.logger.Warn().Str("path", path).Msg("del path from listen")
-
-				s.state.DeleteFile(path)
-			}
-
-			close(s.delCh)
-
-			return
-		}
-	}
-}
-
-func (s *Watcher) tailFile(ctx context.Context, wg *sync.WaitGroup, path string) error {
-	s.logger.Debug().Str("path", path).Msg("start listen for file")
-
-	defer s.logger.Debug().Str("path", path).Msg("finish listen for file")
-	defer wg.Done()
-
-	fileState := s.state.GetFileState(path)
-
-	t, err := tail.TailFile(
-		path,
-		tail.Config{
-			Follow:    true,
-			ReOpen:    false,
-			MustExist: true,
-			Poll:      s.cfg.Poll,
-			Location:  fileState.SeekInfo,
-			Logger:    log.New(s.logger, "", 0),
-		},
-	)
-	if err != nil {
-		s.logger.Err(err).Str("path", path).Msg("tail file")
-
-		return err
-	}
-
-	for {
-		select {
-		case line, ok := <-t.Lines:
-			if !ok {
-				s.delCh <- path
-
-				return nil
-			}
-
-			s.state.UpdateFileSeekInfo(path, &line.SeekInfo)
-
-			s.addLogToBuffer(entity.NewEvent(line, fileState.Meta))
-		case <-ctx.Done():
-			err = t.Stop()
-			if err != nil {
-				s.logger.Err(err).Str("path", path).Msg("stop tail file")
-			}
-
-			for len(t.Lines) > 0 {
-				line := <-t.Lines
-
-				s.state.UpdateFileSeekInfo(path, &line.SeekInfo)
-			}
-
-			return nil
-		}
-	}
-}
-
-func (s *Watcher) statePersister(ctx context.Context, wg *sync.WaitGroup) error {
-	s.logger.Info().Msg("start state persister")
-
-	defer s.logger.Info().Msg("stop state persister")
-	defer wg.Done()
+	defer s.logger.Debug().Msg("stop state persister")
 
 	for {
 		select {
 		case <-time.After(dictionary.FlushStateInterval):
-			if len(s.state.ListenChange()) > 0 {
+			if s.state.GetChangesNumber() > 0 {
 				err := s.stateManager.SaveState(s.state.FlushChanges(len(s.state.ListenChange())))
 				if err != nil {
 					s.logger.Err(err).Msg("save state by timer")
@@ -352,7 +472,7 @@ func (s *Watcher) statePersister(ctx context.Context, wg *sync.WaitGroup) error 
 				}
 			}
 		case <-s.state.ListenChange():
-			if len(s.state.ListenChange()) >= dictionary.FlushChangesNumber {
+			if s.state.GetChangesNumber() >= dictionary.FlushChangesNumber {
 				err := s.stateManager.SaveState(s.state.FlushChanges(len(s.state.ListenChange())))
 				if err != nil {
 					s.logger.Err(err).Msg("save state by change number")
@@ -367,11 +487,10 @@ func (s *Watcher) statePersister(ctx context.Context, wg *sync.WaitGroup) error 
 	}
 }
 
-func (s *Watcher) esSendDispatcher(ctx context.Context, wg *sync.WaitGroup) {
-	s.logger.Info().Msg("start es send dispatcher")
+func (s *Watcher) esSendDispatcher(ctx context.Context) error {
+	s.logger.Debug().Msg("start es send dispatcher")
 
-	defer s.logger.Info().Msg("stop es send dispatcher")
-	defer wg.Done()
+	defer s.logger.Debug().Msg("stop es send dispatcher")
 
 	for {
 		select {
@@ -382,23 +501,25 @@ func (s *Watcher) esSendDispatcher(ctx context.Context, wg *sync.WaitGroup) {
 		case <-ctx.Done():
 			s.sendToESRemainingEvents()
 
-			return
+			return nil
 		}
 	}
 }
 
-func (s *Watcher) esSender(ctx context.Context, wg *sync.WaitGroup) error {
-	s.logger.Info().Msg("start es sender")
+func (s *Watcher) esSender(ctx context.Context, i int) error {
+	s.logger.Debug().Int("worker", i).Msgf("start es sender %d", i)
 
-	defer s.logger.Info().Msg("stop es sender")
-	defer wg.Done()
+	defer s.logger.Debug().Int("worker", i).Msgf("stop es sender %d", i)
 
 	for {
 		select {
 		case events := <-s.esEvents:
 			err := s.esCli.SendEvents(events)
 
-			s.logger.Err(err).Int("num", len(events)).Msg("send events to es")
+			s.logger.Err(err).
+				Int("worker", i).
+				Int("num", len(events)).
+				Msg("send events to es")
 
 			if err != nil {
 				return err
@@ -409,7 +530,10 @@ func (s *Watcher) esSender(ctx context.Context, wg *sync.WaitGroup) error {
 
 				err := s.esCli.SendEvents(events)
 
-				s.logger.Err(err).Int("num", len(events)).Msg("send remaining event to es before shutting down")
+				s.logger.Err(err).
+					Int("worker", i).
+					Int("num", len(events)).
+					Msg("send remaining event to es before shutting down")
 			}
 
 			return nil
@@ -451,7 +575,7 @@ func (s *Watcher) sendToESByTimer() {
 
 	s.esEvents <- events
 
-	s.logger.Warn().
+	s.logger.Info().
 		Int("num", len(events)).
 		Int("num remaining", len(s.event)).
 		Msg("flushed event to es senders by timer")
@@ -473,54 +597,103 @@ func (s *Watcher) sendToESRemainingEvents() {
 	s.logger.Warn().Int("num", len(events)).Msg("send remaining event to es senders before shutting down")
 }
 
-func (s *Watcher) syncState(ctx context.Context, wg *sync.WaitGroup) error {
+func (s *Watcher) syncState(ctx context.Context, g *errgroup.Group) error {
 	if _, err := os.Stat(s.cfg.StatePath); os.IsNotExist(err) {
 		return nil
 	} else if err != nil {
-		s.logger.Err(err).Msg("stat state file")
+		s.logger.Err(err).Msg("stat files file")
 
 		return err
 	}
 
-	s.logger.Debug().Str("path", s.cfg.StatePath).Msg("load state")
+	s.logger.Debug().Str("path", s.cfg.StatePath).Msg("load files")
 
-	state, err := s.stateManager.LoadState()
+	files, err := s.stateManager.LoadFiles()
 	if err != nil {
-		s.logger.Err(err).Msg("load state")
+		s.logger.Err(err).Msg("load files")
 
 		return err
 	}
 
-	s.state.Load(state)
+	s.state.Load(files)
 
-	for path := range state {
-		if _, err := os.Stat(path); err != nil {
+	for _, f := range files {
+		if _, err := os.Stat(f.Path); err != nil {
 			if os.IsNotExist(err) {
-				s.logger.Debug().Str("path", path).Msg("file not found, delete from storage")
-			} else {
-				s.logger.Err(err).Str("path", path).Msg("stat file")
+				s.logger.Warn().Str("path", f.Path).Msg("file not found, delete from storage")
+
+				s.state.DeleteFile(f.Path)
+
+				continue
 			}
 
-			s.state.DeleteFile(path)
-		} else {
-			wg.Add(1)
+			s.logger.Err(err).Str("path", f.Path).Msg("stat file")
 
-			go func(ctx context.Context, wg *sync.WaitGroup, path string) {
-				_ = s.tailFile(ctx, wg, path)
-			}(ctx, wg, path)
+			return err
+		}
+
+		err = f.RestorePosition()
+
+		s.logger.Err(err).Str("path", f.Path).Msg("restore position")
+
+		if err != nil {
+			return err
+		}
+
+		f := f
+
+		g.Go(func() error {
+			return s.listenLine(ctx, f)
+		})
+
+		err = f.Read()
+		if err != nil {
+			s.logger.Err(err).Msg("read file")
+
+			return err
 		}
 	}
 
 	return nil
 }
 
+func (s *Watcher) listenLine(ctx context.Context, f *file.File) error {
+	s.logger.Debug().Str("path", f.Path).Msg("start listen new lines")
+
+	defer s.logger.Debug().Str("path", f.Path).Msg("stop listen new lines")
+
+	fileState := s.state.GetFile(f.Path)
+
+	for {
+		select {
+		case line, ok := <-f.ListenLine():
+			if !ok {
+				s.logger.Warn().Str("path", f.Path).Msg("line channel closed")
+
+				return nil
+			}
+
+			s.addLogToBuffer(entity.NewEvent(line, fileState.Meta))
+			s.state.SetFile(f.Path, f)
+
+		case <-ctx.Done():
+			for len(f.ListenLine()) > 0 {
+				line := <-f.ListenLine()
+
+				s.addLogToBuffer(entity.NewEvent(line, fileState.Meta))
+				s.state.SetFile(f.Path, f)
+			}
+
+			return nil
+		}
+	}
+}
+
 func (s *Watcher) addLogToBuffer(event *entity.Event) {
 	if len(s.event) == cap(s.event) {
 		s.logger.
 			Err(dictionary.ErrChannelOverflowed).
-			Msg("logs channel overflowed, new logs will be dropped")
-
-		return
+			Msg("logs channel overflowed, consider increasing es workers")
 	}
 
 	s.event <- event
@@ -538,9 +711,24 @@ func (s *Watcher) parseK8sMeta(path string) *entity.Meta {
 	}
 
 	return &entity.Meta{
-		PodName:       matches[0][1],
-		Namespace:     matches[0][2],
-		ContainerName: matches[0][3],
-		ContainerID:   matches[0][4],
+		PodName:       matches[0][2],
+		Namespace:     matches[0][1],
+		ContainerName: matches[0][4],
+		PodID:         matches[0][3],
 	}
+}
+
+func (s *Watcher) isLogFile(path string) bool {
+	return len(path) > 4 && path[len(path)-4:] == ".log"
+}
+
+func (s *Watcher) statFile(path string) (os.FileInfo, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		s.logger.Err(err).Str("path", path).Msg("stat file/dir")
+
+		return nil, err
+	}
+
+	return info, err
 }

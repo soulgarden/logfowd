@@ -2,8 +2,6 @@ package entity
 
 import (
 	"time"
-
-	"github.com/nxadm/tail"
 )
 
 type Event struct {
@@ -12,15 +10,15 @@ type Event struct {
 	*Meta
 }
 
-func NewEvent(line *tail.Line, meta *Meta) *Event {
+func NewEvent(line *Line, meta *Meta) *Event {
 	return &Event{
-		Message: line.Text,
+		Message: line.Str,
 		Time:    line.Time,
 		Meta: &Meta{
 			PodName:       meta.PodName,
 			Namespace:     meta.Namespace,
 			ContainerName: meta.ContainerName,
-			ContainerID:   meta.ContainerID,
+			PodID:         meta.PodID,
 		},
 	}
 }

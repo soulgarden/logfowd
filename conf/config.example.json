@@ -11,7 +11,6 @@
   "poll": true,
   "state_path": "./storage/state.json",
   "logs_path": [
-    "/var/lib/docker/containers",
-    "/var/log/containers"
+    "/var/log/pods"
   ]
 }

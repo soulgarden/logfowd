@@ -6,5 +6,5 @@ import (
 
 const (
 	RequestTimeout = 30 * time.Second
-	SendBatchesNum = 10
+	SendBatchesNum = 2
 )
