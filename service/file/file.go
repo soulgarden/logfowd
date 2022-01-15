@@ -14,13 +14,10 @@ import (
 const LinesChanLen = 1024 * 10
 
 type File struct {
-	file   *os.File
-	reader *bufio.Reader
-	lines  chan *entity.Line
-	Size   int64
-	Offset int64
-	Path   string
-	Meta   *entity.Meta
+	file       *os.File
+	EntityFile *entity.File
+	reader     *bufio.Reader
+	lines      chan *entity.Line
 }
 
 func NewFile(path string) (*File, error) {
@@ -29,12 +26,18 @@ func NewFile(path string) (*File, error) {
 		return nil, err
 	}
 
-	return &File{
-		file:   f,
-		reader: bufio.NewReader(f),
-		lines:  make(chan *entity.Line, LinesChanLen),
+	entityFile := &entity.File{
+		Size:   0,
+		Offset: 0,
 		Path:   path,
 		Meta:   &entity.Meta{},
+	}
+
+	return &File{
+		file:       f,
+		reader:     bufio.NewReader(f),
+		lines:      make(chan *entity.Line, LinesChanLen),
+		EntityFile: entityFile,
 	}, err
 }
 
@@ -49,8 +52,8 @@ func (s *File) SeekEnd() error {
 		return err
 	}
 
-	s.Size = info.Size()
-	s.Offset = offset
+	s.EntityFile.Size = info.Size()
+	s.EntityFile.Offset = offset
 
 	s.reader.Reset(s.file)
 
@@ -75,7 +78,7 @@ func (s *File) Reset() error {
 		return err
 	}
 
-	f, err := os.Open(s.Path)
+	f, err := os.Open(s.EntityFile.Path)
 	if err != nil {
 		return err
 	}
@@ -84,13 +87,13 @@ func (s *File) Reset() error {
 
 	s.file = f
 
-	s.Offset = 0
+	s.EntityFile.Offset = 0
 
 	return nil
 }
 
 func (s *File) RestorePosition() error {
-	f, err := os.Open(s.Path)
+	f, err := os.Open(s.EntityFile.Path)
 	if err != nil {
 		return err
 	}
@@ -104,13 +107,13 @@ func (s *File) RestorePosition() error {
 		return err
 	}
 
-	size := s.Size // nolint: ifshort
+	size := s.EntityFile.Size // nolint: ifshort
 
-	s.Size = info.Size()
+	s.EntityFile.Size = info.Size()
 
 	var offset int64
 
-	if s.Size >= size {
+	if s.EntityFile.Size >= size {
 		offset, err = f.Seek(0, io.SeekEnd)
 		if err != nil {
 			return err
@@ -118,7 +121,7 @@ func (s *File) RestorePosition() error {
 	}
 
 	// file probably was truncated, reset position
-	s.Offset = offset
+	s.EntityFile.Offset = offset
 
 	s.reader.Reset(s.file)
 
@@ -126,16 +129,16 @@ func (s *File) RestorePosition() error {
 }
 
 func (s *File) IsTruncated() (bool, error) {
-	size := s.Size
+	size := s.EntityFile.Size
 
 	info, err := s.file.Stat()
 	if err != nil {
 		return false, err
 	}
 
-	s.Size = info.Size()
+	s.EntityFile.Size = info.Size()
 
-	return size > 0 && size > s.Size, nil
+	return size > 0 && size > s.EntityFile.Size, nil
 }
 
 func (s *File) readLine() error {
@@ -149,10 +152,10 @@ func (s *File) readLine() error {
 		return err
 	}
 
-	s.Offset = offset - int64(s.reader.Buffered())
+	s.EntityFile.Offset = offset - int64(s.reader.Buffered())
 
 	s.lines <- &entity.Line{
-		Pos:  s.Offset,
+		Pos:  s.EntityFile.Offset,
 		Str:  strings.TrimRight(str, "\n"),
 		Time: time.Now(),
 	}

@@ -57,6 +57,14 @@ func (s *Watcher) Start(ctx context.Context) {
 		return
 	}
 
+	if err := s.stateManager.Open(); err != nil {
+		s.logger.Err(err).Msg("open storage file")
+
+		return
+	}
+
+	defer s.stateManager.Close()
+
 	g.Go(func() error {
 		return s.statePersister(ctx)
 	})
@@ -87,10 +95,10 @@ func (s *Watcher) Start(ctx context.Context) {
 
 	s.logger.Err(err).Msg("wait goroutines")
 
-	s.logger.Err(s.stateManager.SaveState(s.state.FlushChanges(0))).Msg("save state before shutdown")
+	s.logger.Err(s.stateManager.SaveState(s.state.FlushState(0))).Msg("save state before shutdown")
 }
 
-// nolint: funlen
+// nolint: funlen, gocognit, cyclop
 func (s *Watcher) watch(ctx context.Context, g *errgroup.Group) error {
 	s.logger.Debug().Msg("start log files watcher")
 
@@ -333,8 +341,8 @@ func (s *Watcher) written(path string) error {
 
 		s.logger.Warn().
 			Str("path", path).
-			Int64("offset", f.Offset).
-			Int64("size", f.Size).
+			Int64("offset", f.EntityFile.Offset).
+			Int64("size", f.EntityFile.Size).
 			Msg("file was truncated")
 
 		s.state.SetFile(path, f)
@@ -382,7 +390,7 @@ func (s *Watcher) addFile(path string) (*file.File, error) {
 		return nil, err
 	}
 
-	f.Meta = s.parseK8sMeta(path)
+	f.EntityFile.Meta = s.parseK8sMeta(path)
 
 	s.state.SetFile(path, f)
 
@@ -417,33 +425,35 @@ func (s *Watcher) list(ctx context.Context, g *errgroup.Group, logPath string) e
 			return err
 		}
 
-		if !d.IsDir() && s.isLogFile(d.Name()) {
-			if !s.state.IsFileExists(path) {
-				f, err := s.addFile(path)
-				if err != nil {
-					return err
-				}
+		if d.IsDir() && !s.isLogFile(d.Name()) {
+			return nil
+		}
 
-				err = f.SeekEnd()
-				if err != nil {
-					return err
-				}
-
-				s.state.SetFile(path, f)
-
-				g.Go(func() error {
-					return s.listenLine(ctx, f)
-				})
-
-				g.Go(func() error {
-					err = f.Read()
-					if err != nil {
-						s.logger.Err(err).Str("path", path).Msg("read file")
-					}
-
-					return err
-				})
+		if !s.state.IsFileExists(path) {
+			f, err := s.addFile(path)
+			if err != nil {
+				return err
 			}
+
+			err = f.SeekEnd()
+			if err != nil {
+				return err
+			}
+
+			s.state.SetFile(path, f)
+
+			g.Go(func() error {
+				return s.listenLine(ctx, f)
+			})
+
+			g.Go(func() error {
+				err = f.Read()
+				if err != nil {
+					s.logger.Err(err).Str("path", path).Msg("read file")
+				}
+
+				return err
+			})
 		}
 
 		return err
@@ -464,7 +474,7 @@ func (s *Watcher) statePersister(ctx context.Context) error {
 		select {
 		case <-time.After(dictionary.FlushStateInterval):
 			if s.state.GetChangesNumber() > 0 {
-				err := s.stateManager.SaveState(s.state.FlushChanges(len(s.state.ListenChange())))
+				err := s.stateManager.SaveState(s.state.FlushState(len(s.state.ListenChange())))
 				if err != nil {
 					s.logger.Err(err).Msg("save state by timer")
 
@@ -473,7 +483,7 @@ func (s *Watcher) statePersister(ctx context.Context) error {
 			}
 		case <-s.state.ListenChange():
 			if s.state.GetChangesNumber() >= dictionary.FlushChangesNumber {
-				err := s.stateManager.SaveState(s.state.FlushChanges(len(s.state.ListenChange())))
+				err := s.stateManager.SaveState(s.state.FlushState(len(s.state.ListenChange())))
 				if err != nil {
 					s.logger.Err(err).Msg("save state by change number")
 
@@ -546,10 +556,10 @@ func (s *Watcher) sendToESByLimit() {
 		return
 	}
 
-	events := []*entity.Event{}
+	events := make([]*entity.Event, dictionary.FlushLogsNumber)
 
 	for i := 0; i < dictionary.FlushLogsNumber; i++ {
-		events = append(events, <-s.event)
+		events[i] = <-s.event
 	}
 
 	s.esEvents <- events
@@ -567,10 +577,10 @@ func (s *Watcher) sendToESByTimer() {
 		return
 	}
 
-	events := []*entity.Event{}
+	events := make([]*entity.Event, num)
 
 	for i := 0; i < num; i++ {
-		events = append(events, <-s.event)
+		events[i] = <-s.event
 	}
 
 	s.esEvents <- events
@@ -582,11 +592,11 @@ func (s *Watcher) sendToESByTimer() {
 }
 
 func (s *Watcher) sendToESRemainingEvents() {
-	events := []*entity.Event{}
-
 	if len(s.event) == 0 {
 		return
 	}
+
+	events := []*entity.Event{}
 
 	for len(s.event) > 0 {
 		events = append(events, <-s.event)
@@ -608,33 +618,33 @@ func (s *Watcher) syncState(ctx context.Context, g *errgroup.Group) error {
 
 	s.logger.Debug().Str("path", s.cfg.StatePath).Msg("load files")
 
-	files, err := s.stateManager.LoadFiles()
+	state, err := s.stateManager.LoadState()
 	if err != nil {
-		s.logger.Err(err).Msg("load files")
+		s.logger.Err(err).Msg("load state")
 
 		return err
 	}
 
-	s.state.Load(files)
+	files := s.state.Load(state)
 
-	for _, f := range files {
-		if _, err := os.Stat(f.Path); err != nil {
+	for path, f := range files {
+		if _, err := os.Stat(path); err != nil {
 			if os.IsNotExist(err) {
-				s.logger.Warn().Str("path", f.Path).Msg("file not found, delete from storage")
+				s.logger.Warn().Str("path", path).Msg("file not found, delete from storage")
 
-				s.state.DeleteFile(f.Path)
+				s.state.DeleteFile(path)
 
 				continue
 			}
 
-			s.logger.Err(err).Str("path", f.Path).Msg("stat file")
+			s.logger.Err(err).Str("path", path).Msg("stat file")
 
 			return err
 		}
 
 		err = f.RestorePosition()
 
-		s.logger.Err(err).Str("path", f.Path).Msg("restore position")
+		s.logger.Err(err).Str("path", path).Msg("restore position")
 
 		if err != nil {
 			return err
@@ -658,30 +668,30 @@ func (s *Watcher) syncState(ctx context.Context, g *errgroup.Group) error {
 }
 
 func (s *Watcher) listenLine(ctx context.Context, f *file.File) error {
-	s.logger.Debug().Str("path", f.Path).Msg("start listen new lines")
+	s.logger.Debug().Str("path", f.EntityFile.Path).Msg("start listen new lines")
 
-	defer s.logger.Debug().Str("path", f.Path).Msg("stop listen new lines")
+	defer s.logger.Debug().Str("path", f.EntityFile.Path).Msg("stop listen new lines")
 
-	fileState := s.state.GetFile(f.Path)
+	fileState := s.state.GetFile(f.EntityFile.Path)
 
 	for {
 		select {
 		case line, ok := <-f.ListenLine():
 			if !ok {
-				s.logger.Warn().Str("path", f.Path).Msg("line channel closed")
+				s.logger.Warn().Str("path", f.EntityFile.Path).Msg("line channel closed")
 
 				return nil
 			}
 
-			s.addLogToBuffer(entity.NewEvent(line, fileState.Meta))
-			s.state.SetFile(f.Path, f)
+			s.addLogToBuffer(entity.NewEvent(line, fileState.EntityFile.Meta))
+			s.state.SetFile(f.EntityFile.Path, f)
 
 		case <-ctx.Done():
 			for len(f.ListenLine()) > 0 {
 				line := <-f.ListenLine()
 
-				s.addLogToBuffer(entity.NewEvent(line, fileState.Meta))
-				s.state.SetFile(f.Path, f)
+				s.addLogToBuffer(entity.NewEvent(line, fileState.EntityFile.Meta))
+				s.state.SetFile(f.EntityFile.Path, f)
 			}
 
 			return nil

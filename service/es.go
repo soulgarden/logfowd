@@ -2,10 +2,12 @@ package service
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"net/http"
+	"sync"
 	"time"
+
+	"github.com/mailru/easyjson"
 
 	"github.com/rs/zerolog"
 	uuid "github.com/satori/go.uuid"
@@ -16,53 +18,48 @@ import (
 )
 
 type Cli struct {
-	cfg     *conf.Config
-	httpCli *fasthttp.Client
-	logger  *zerolog.Logger
+	cfg           *conf.Config
+	httpCli       *fasthttp.Client
+	buffers       sync.Pool
+	fieldsBodies  sync.Pool
+	indexRequests sync.Pool
+	logger        *zerolog.Logger
 }
 
 func NewESCli(cfg *conf.Config, logger *zerolog.Logger) *Cli {
-	return &Cli{cfg: cfg, httpCli: &fasthttp.Client{}, logger: logger}
+	return &Cli{
+		cfg:     cfg,
+		httpCli: &fasthttp.Client{},
+		buffers: sync.Pool{
+			New: func() interface{} { return &bytes.Buffer{} },
+		},
+		fieldsBodies: sync.Pool{
+			New: func() interface{} {
+				return &entity.FieldsBody{}
+			},
+		},
+		indexRequests: sync.Pool{
+			New: func() interface{} { return &entity.IndexRequest{IndexRequestBody: &entity.IndexRequestBody{}} },
+		},
+		logger: logger,
+	}
 }
 
 func (s *Cli) SendEvents(events []*entity.Event) error {
 	req := fasthttp.AcquireRequest()
 	resp := fasthttp.AcquireResponse()
 
-	var buf bytes.Buffer
+	buf, err := s.makeBody(events)
+	if err != nil {
+		s.logger.Err(err).Msg("make body")
 
-	for _, event := range events {
-		marshalled, err := json.Marshal(&entity.IndexRequest{
-			IndexRequestBody: &entity.IndexRequestBody{
-				ID: uuid.NewV4().String(),
-			},
-		})
-		if err != nil {
-			return err
-		}
-
-		buf.Write(marshalled)
-		buf.Write([]byte("\n"))
-
-		marshalled, err = json.Marshal(&entity.FieldsBody{
-			Message:       event.Message,
-			Timestamp:     event.Time,
-			PodName:       event.PodName,
-			Namespace:     event.Namespace,
-			ContainerName: event.ContainerName,
-			PodID:         event.PodID,
-		})
-		if err != nil {
-			return err
-		}
-
-		buf.Write(marshalled)
-		buf.Write([]byte("\n"))
+		return err
 	}
 
-	buf.Write([]byte("\n"))
-
 	req.SetBody(buf.Bytes())
+
+	buf.Reset()
+	s.buffers.Put(buf)
 
 	req.Header.SetMethod(fasthttp.MethodPost)
 	req.Header.SetContentType("application/json")
@@ -78,6 +75,61 @@ func (s *Cli) SendEvents(events []*entity.Event) error {
 	}
 
 	return nil
+}
+
+func (s *Cli) makeBody(events []*entity.Event) (*bytes.Buffer, error) {
+	buf, ok := s.buffers.Get().(*bytes.Buffer)
+	if !ok {
+		return buf, dictionary.ErrInterfaceAssertion
+	}
+
+	var indexRequest *entity.IndexRequest
+
+	var fieldsBody *entity.FieldsBody
+
+	for _, event := range events {
+		indexRequest, ok = s.indexRequests.Get().(*entity.IndexRequest)
+		if !ok {
+			return buf, dictionary.ErrInterfaceAssertion
+		}
+
+		indexRequest.IndexRequestBody.ID = uuid.NewV4().String()
+
+		marshalled, err := easyjson.Marshal(indexRequest)
+		if err != nil {
+			return buf, err
+		}
+
+		buf.Write(marshalled)
+		buf.Write([]byte("\n"))
+
+		fieldsBody, ok = s.fieldsBodies.Get().(*entity.FieldsBody)
+		if !ok {
+			return buf, dictionary.ErrInterfaceAssertion
+		}
+
+		fieldsBody.Message = event.Message
+		fieldsBody.Timestamp = event.Time
+		fieldsBody.PodName = event.PodName
+		fieldsBody.Namespace = event.Namespace
+		fieldsBody.ContainerName = event.ContainerName
+		fieldsBody.PodID = event.PodID
+
+		marshalled, err = easyjson.Marshal(fieldsBody)
+		if err != nil {
+			return buf, err
+		}
+
+		buf.Write(marshalled)
+		buf.Write([]byte("\n"))
+
+		s.indexRequests.Put(indexRequest)
+		s.fieldsBodies.Put(fieldsBody)
+	}
+
+	buf.Write([]byte("\n"))
+
+	return buf, nil
 }
 
 func (s *Cli) makeRequest(req *fasthttp.Request, resp *fasthttp.Response) error {

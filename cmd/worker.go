@@ -32,9 +32,11 @@ func newWorker() *cobra.Command {
 
 			ctx, _ := cmdManager.ListenSignal()
 
+			stateSvc := service.NewState(cfg, &logger)
+
 			service.NewWatcher(
 				cfg,
-				service.NewState(cfg, &logger),
+				stateSvc,
 				service.NewESCli(cfg, &logger),
 				&logger,
 			).Start(ctx)

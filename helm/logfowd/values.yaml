@@ -84,7 +84,6 @@ app:
     index_name: logfowd
     flush_interval: 1000
     workers: 10
-  poll: false
   state_path: ./storage/state.json
   logs_path:
     - "/var/log/pods"

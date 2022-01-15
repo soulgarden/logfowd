@@ -4,6 +4,7 @@ issues:
       linters:
         - funlen
         - dupl
+        - testpackage
     - path: /
       linters:
         - gci

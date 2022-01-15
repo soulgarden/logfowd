@@ -3,6 +3,7 @@ package storage
 import (
 	"sync"
 
+	"github.com/soulgarden/logfowd/entity"
 	"github.com/soulgarden/logfowd/service/file"
 
 	"github.com/soulgarden/logfowd/dictionary"
@@ -26,11 +27,11 @@ func (s *State) ListenChange() <-chan struct{} {
 	return s.change
 }
 
-func (s *State) SetFile(path string, state *file.File) {
+func (s *State) SetFile(path string, files *file.File) {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 
-	s.files[path] = state
+	s.files[path] = files
 
 	s.makeChange()
 }
@@ -42,7 +43,7 @@ func (s *State) RenameFile(oldPath, newPath string) {
 	f := s.files[oldPath]
 	delete(s.files, oldPath)
 
-	f.Path = newPath
+	f.EntityFile.Path = newPath
 
 	s.files[newPath] = f
 
@@ -75,7 +76,7 @@ func (s *State) IsFileExists(path string) bool {
 	return false
 }
 
-func (s *State) FlushChanges(number int) map[string]*file.File {
+func (s *State) FlushState(number int) *entity.State {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 
@@ -84,20 +85,28 @@ func (s *State) FlushChanges(number int) map[string]*file.File {
 		s.changesNumber--
 	}
 
-	files := make(map[string]*file.File, len(s.files))
+	state := entity.NewState(len(s.files))
 
 	for k, v := range s.files {
-		files[k] = v
+		state.Files[k] = v.EntityFile
 	}
 
-	return files
+	return state
 }
 
-func (s *State) Load(state map[string]*file.File) {
+func (s *State) Load(state *entity.State) map[string]*file.File {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 
-	s.files = state
+	s.files = make(map[string]*file.File, len(state.Files))
+
+	for k, v := range state.Files {
+		s.files[k] = &file.File{
+			EntityFile: v,
+		}
+	}
+
+	return s.files
 }
 
 func (s *State) makeChange() {

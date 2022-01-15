@@ -7,18 +7,19 @@ import (
 )
 
 type Config struct {
-	Env       string `json:"env" default:"prod"`
-	DebugMode bool   `json:"debug_mode"  default:"false"`
-	Poll      bool   `json:"poll" default:"true"`
-	ES        struct {
-		Host          string `json:"host" default:"elasticsearch"`
-		Port          string `json:"port" default:"9200"`
-		IndexName     string `json:"index_name" default:"logfowd"`
-		FlushInterval int    `json:"flush_interval" default:"1000"`
-		Workers       int    `json:"workers" default:"10"`
-	} `json:"elasticsearch"`
+	Env       string   `json:"env" default:"prod"`
+	DebugMode bool     `json:"debug_mode"  default:"false"`
+	ES        *ES      `json:"elasticsearch"`
 	StatePath string   `json:"state_path" default:"./storage/state.json"`
 	LogsPath  []string `json:"logs_path" default:"/var/lib/docker/containers"`
+}
+
+type ES struct {
+	Host          string `json:"host" default:"elasticsearch"`
+	Port          string `json:"port" default:"9200"`
+	IndexName     string `json:"index_name" default:"logfowd"`
+	FlushInterval int    `json:"flush_interval" default:"1000"`
+	Workers       int    `json:"workers" default:"10"`
 }
 
 func New() (*Config, error) {
