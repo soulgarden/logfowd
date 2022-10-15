@@ -10,7 +10,6 @@ type Config struct {
 	Env       string   `json:"env" default:"prod"`
 	DebugMode bool     `json:"debug_mode"  default:"false"`
 	ES        *ES      `json:"elasticsearch"`
-	StatePath string   `json:"state_path" default:"./storage/state.json"`
 	LogsPath  []string `json:"logs_path" default:"/var/lib/docker/containers"`
 }
 

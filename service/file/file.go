@@ -92,42 +92,6 @@ func (s *File) Reset() error {
 	return nil
 }
 
-func (s *File) RestorePosition() error {
-	f, err := os.Open(s.EntityFile.Path)
-	if err != nil {
-		return err
-	}
-
-	s.file = f
-	s.reader = bufio.NewReader(s.file)
-	s.lines = make(chan *entity.Line, LinesChanLen)
-
-	info, err := s.file.Stat()
-	if err != nil {
-		return err
-	}
-
-	size := s.EntityFile.Size // nolint: ifshort
-
-	s.EntityFile.Size = info.Size()
-
-	var offset int64
-
-	if s.EntityFile.Size >= size {
-		offset, err = f.Seek(0, io.SeekEnd)
-		if err != nil {
-			return err
-		}
-	}
-
-	// file probably was truncated, reset position
-	s.EntityFile.Offset = offset
-
-	s.reader.Reset(s.file)
-
-	return nil
-}
-
 func (s *File) IsTruncated() (bool, error) {
 	size := s.EntityFile.Size
 

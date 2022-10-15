@@ -49,6 +49,9 @@ func (s *Cli) SendEvents(events []*entity.Event) error {
 	req := fasthttp.AcquireRequest()
 	resp := fasthttp.AcquireResponse()
 
+	defer fasthttp.ReleaseRequest(req)
+	defer fasthttp.ReleaseResponse(resp)
+
 	buf, err := s.makeBody(events)
 	if err != nil {
 		s.logger.Err(err).Msg("make body")

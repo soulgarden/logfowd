@@ -6,10 +6,6 @@ type IndexRequest struct {
 	IndexRequestBody *IndexRequestBody `json:"index"`
 }
 
-type DynamicTemplates struct {
-	Timestamp string `json:"@timestamp"`
-}
-
 type IndexRequestBody struct {
 	ID string `json:"_id"`
 }

@@ -8,7 +8,7 @@ networks:
 
 services:
   elasticsearch-master:
-    container_name: kickid_elastic
+    container_name: elasticsearch-master
     image: elasticsearch:7.16.2
     restart: always
     environment:
