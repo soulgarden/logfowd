@@ -40,14 +40,10 @@ spec:
             privileged: false
             readOnlyRootFilesystem: false
           volumeMounts:
-            - { name: liblogs, mountPath: /var/lib/docker/containers, readOnly: true }
             - { name: varlog, mountPath: /var/log, readOnly: true }
-            - { name: storage, mountPath: /storage }
             - { name: config, subPath: config.json, mountPath: /conf/config.json, readOnly: true }
       volumes:
-        - { name: liblogs, hostPath: { path: "/var/lib/docker/containers" } }
         - { name: varlog, hostPath: { path: "/var/log" } }
-        - { name: storage, hostPath: { path: "/storage" } }
         - { name: config, configMap: { name: {{ include "logfowd.fullname" . }}-config } }
       {{- with .Values.nodeSelector }}
       nodeSelector:

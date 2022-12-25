@@ -1,4 +1,4 @@
-FROM golang:1.17.2-alpine3.14 as builder
+FROM golang:1.19-alpine3.17 as builder
 
 ENV GOPATH=/go
 
@@ -8,7 +8,7 @@ WORKDIR $GOPATH/src/github.com/soulgarden/logfowd
 
 RUN go build -o /bin/logfowd
 
-FROM alpine:3.14
+FROM alpine:3.17
 
 RUN adduser -S www-data -G www-data
 

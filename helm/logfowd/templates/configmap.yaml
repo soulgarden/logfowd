@@ -16,6 +16,5 @@ data:
         "flush_interval": {{ .Values.app.elasticsearch.flush_interval }},
         "workers": {{ .Values.app.elasticsearch.workers }}
       },
-      "state_path": "{{ .Values.app.state_path }}",
       "logs_path": {{ .Values.app.logs_path | toJson }}
     }

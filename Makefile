@@ -10,5 +10,4 @@ test:
 #docker
 
 build:
-	docker build . -f ./docker/Dockerfile -t soulgarden/logfowd:0.0.4 --platform linux/amd64
-	docker push soulgarden/logfowd:0.0.4
+	docker buildx build . -f ./docker/Dockerfile -t soulgarden/logfowd:0.0.5 --platform linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64/v8 --push

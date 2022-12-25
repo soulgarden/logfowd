@@ -4,11 +4,12 @@
 
 Logfowd collects logs from k8s using filesystem events and sends it to elasticsearch. The main goal is low memory and cpu consumption.
 
-Support ES 7.x, k8s 1.14+
+Supports ES 7.x, k8s 1.14+
 
 ### Install with helm
+    make create_namespace
 
-    helm install -n=logging logfowd helm/logfowd --wait --dry-run
+    make helm_install
 
 ### Linters
 
