@@ -58,5 +58,5 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64/v8
           tags: ${{ secrets.DOCKER_HUB_USERNAME }}/logfowd:0.0.5
-          cache-from: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/logfowd-latest
-          cache-to: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/logfowd-latest,mode=max
+          cache-from: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/logfowd:latest
+          cache-to: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/logfowd:latest,mode=max
