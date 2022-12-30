@@ -16,7 +16,7 @@ func TestCli_makeBody(t *testing.T) {
 	t.Parallel()
 
 	type fields struct {
-		cfg     *conf.Config
+		cfg     conf.Config
 		httpCli *fasthttp.Client
 		logger  *zerolog.Logger
 	}
@@ -37,7 +37,7 @@ func TestCli_makeBody(t *testing.T) {
 		{
 			name: "test 1",
 			fields: fields{
-				cfg:     nil,
+				cfg:     conf.Config{},
 				httpCli: nil,
 				logger:  &logger,
 			},
@@ -99,7 +99,7 @@ func TestCli_makeBody(t *testing.T) {
 }
 
 func BenchmarkCli_makeBody(b *testing.B) {
-	s := NewESCli(nil, nil)
+	s := NewESCli(conf.Config{}, nil)
 
 	const eventsNum = 100
 
