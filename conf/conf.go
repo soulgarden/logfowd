@@ -9,8 +9,8 @@ import (
 type Config struct {
 	Env       string   `json:"env" default:"prod"`
 	DebugMode bool     `json:"debug_mode"  default:"false"`
-	ES        *ES      `json:"elasticsearch"`
-	LogsPath  []string `json:"logs_path" default:"/var/lib/docker/containers"`
+	ES        ES       `json:"elasticsearch"`
+	LogsPath  []string `json:"logs_path" default:"/var/log/pods"`
 }
 
 type ES struct {
@@ -19,18 +19,22 @@ type ES struct {
 	IndexName     string `json:"index_name" default:"logfowd"`
 	FlushInterval int    `json:"flush_interval" default:"1000"`
 	Workers       int    `json:"workers" default:"10"`
+	APIPrefix     string `json:"api_prefix" default:""`
+	UseAuth       bool   `json:"use_auth" default:"false"`
+	Username      string `json:"username" default:""`
+	Password      string `json:"password" default:""`
 }
 
-func New() (*Config, error) {
-	c := &Config{}
+func New() (Config, error) {
+	c := Config{}
 	path := os.Getenv("CFG_PATH")
 
 	if path == "" {
 		path = "./conf/config.json"
 	}
 
-	if err := configor.New(&configor.Config{ErrorOnUnmatchedKeys: true}).Load(c, path); err != nil {
-		return nil, err
+	if err := configor.New(&configor.Config{ErrorOnUnmatchedKeys: true}).Load(&c, path); err != nil {
+		return c, err
 	}
 
 	return c, nil

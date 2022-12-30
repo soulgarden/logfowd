@@ -1,13 +1,16 @@
 package entity
 
 import "time"
+import _ "github.com/mailru/easyjson/gen"
 
+//go:generate easyjson -all
 type IndexRequest struct {
 	IndexRequestBody *IndexRequestBody `json:"index"`
 }
 
 type IndexRequestBody struct {
-	ID string `json:"_id"`
+	Index string `json:"_index"`
+	ID    string `json:"_id"`
 }
 
 type FieldsBody struct {

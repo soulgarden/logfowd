@@ -14,7 +14,11 @@ data:
         "port": "{{ .Values.app.elasticsearch.port }}",
         "index_name": "{{ .Values.app.elasticsearch.index_name }}",
         "flush_interval": {{ .Values.app.elasticsearch.flush_interval }},
-        "workers": {{ .Values.app.elasticsearch.workers }}
+        "workers": {{ .Values.app.elasticsearch.workers }},
+        "api_prefix": "{{ .Values.app.elasticsearch.api_prefix }}",
+        "use_auth": {{ .Values.app.elasticsearch.use_auth }},
+        "username": "{{ .Values.app.elasticsearch.username }}",
+        "password": "{{ .Values.app.elasticsearch.password }}"
       },
       "logs_path": {{ .Values.app.logs_path | toJson }}
     }

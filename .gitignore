@@ -19,3 +19,5 @@ conf/config.local.json
 conf/config.json
 storage/state.json
 storage/logs
+
+**/*_easyjson.go

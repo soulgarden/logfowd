@@ -6,7 +6,10 @@ COPY . $GOPATH/src/github.com/soulgarden/logfowd
 
 WORKDIR $GOPATH/src/github.com/soulgarden/logfowd
 
-RUN go build -o /bin/logfowd
+RUN go get github.com/mailru/easyjson && \
+    go install github.com/mailru/easyjson/...@latest &&  \
+    go generate ./... && \
+    go build -o /bin/logfowd
 
 FROM alpine:3.17
 

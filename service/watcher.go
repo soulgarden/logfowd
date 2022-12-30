@@ -23,7 +23,7 @@ import (
 )
 
 type Watcher struct {
-	cfg       *conf.Config
+	cfg       conf.Config
 	event     chan *entity.Event
 	esEvents  chan []*entity.Event
 	hasEvent  chan struct{}
@@ -33,7 +33,7 @@ type Watcher struct {
 	logger    *zerolog.Logger
 }
 
-func NewWatcher(cfg *conf.Config, esCli *Cli, logger *zerolog.Logger) *Watcher {
+func NewWatcher(cfg conf.Config, esCli *Cli, logger *zerolog.Logger) *Watcher {
 	return &Watcher{
 		cfg:       cfg,
 		event:     make(chan *entity.Event, cfg.ES.Workers*dictionary.SendBatchesNum*dictionary.FlushLogsNumber),

@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"sync"
@@ -18,7 +19,7 @@ import (
 )
 
 type Cli struct {
-	cfg           *conf.Config
+	cfg           conf.Config
 	httpCli       *fasthttp.Client
 	buffers       sync.Pool
 	fieldsBodies  sync.Pool
@@ -26,7 +27,7 @@ type Cli struct {
 	logger        *zerolog.Logger
 }
 
-func NewESCli(cfg *conf.Config, logger *zerolog.Logger) *Cli {
+func NewESCli(cfg conf.Config, logger *zerolog.Logger) *Cli {
 	return &Cli{
 		cfg:     cfg,
 		httpCli: &fasthttp.Client{},
@@ -65,12 +66,18 @@ func (s *Cli) SendEvents(events []*entity.Event) error {
 	s.buffers.Put(buf)
 
 	req.Header.SetMethod(fasthttp.MethodPost)
+
 	req.Header.SetContentType("application/json")
 
-	index := s.cfg.ES.IndexName + "-" + time.Now().Format("2006.01.02")
+	if s.cfg.ES.UseAuth {
+		req.Header.Set(
+			"Authorization",
+			"Basic "+base64.StdEncoding.EncodeToString([]byte(s.cfg.ES.Username+":"+s.cfg.ES.Password)),
+		)
+	}
 
 	req.SetRequestURI(
-		s.cfg.ES.Host + ":" + s.cfg.ES.Port + "/" + index + "/_bulk",
+		s.cfg.ES.Host + ":" + s.cfg.ES.Port + s.cfg.ES.APIPrefix + s.getIndexName() + "/_bulk",
 	)
 
 	if err := s.makeRequest(req, resp); err != nil {
@@ -78,6 +85,10 @@ func (s *Cli) SendEvents(events []*entity.Event) error {
 	}
 
 	return nil
+}
+
+func (s *Cli) getIndexName() string {
+	return s.cfg.ES.IndexName + "-" + time.Now().Format("2006.01.02")
 }
 
 func (s *Cli) makeBody(events []*entity.Event) (*bytes.Buffer, error) {
@@ -97,6 +108,7 @@ func (s *Cli) makeBody(events []*entity.Event) (*bytes.Buffer, error) {
 		}
 
 		indexRequest.IndexRequestBody.ID = uuid.NewV4().String()
+		indexRequest.IndexRequestBody.Index = s.getIndexName()
 
 		marshalled, err := easyjson.Marshal(indexRequest)
 		if err != nil {
@@ -129,8 +141,6 @@ func (s *Cli) makeBody(events []*entity.Event) (*bytes.Buffer, error) {
 		s.indexRequests.Put(indexRequest)
 		s.fieldsBodies.Put(fieldsBody)
 	}
-
-	buf.Write([]byte("\n"))
 
 	return buf, nil
 }

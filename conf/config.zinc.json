@@ -1,0 +1,18 @@
+{
+  "env": "local",
+  "debug_mode": true,
+  "elasticsearch": {
+    "host": "http://127.0.0.1",
+    "port": "4080",
+    "index_name": "logfowd",
+    "flush_interval": 1000,
+    "workers": 6,
+    "api_prefix": "/api/",
+    "use_auth": true,
+    "username": "admin",
+    "password": "password"
+  },
+  "logs_path": [
+    "/var/log/pods"
+  ]
+}
