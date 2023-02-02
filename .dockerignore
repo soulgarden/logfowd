@@ -15,8 +15,8 @@
 vendor/
 
 .idea
-conf/config.local.json
-conf/config.json
+config.local.json
+config.json
 storage/state.json
 storage/logs
 

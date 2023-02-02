@@ -69,15 +69,15 @@ func (s *Cli) SendEvents(events []*entity.Event) error {
 
 	req.Header.SetContentType("application/json")
 
-	if s.cfg.ES.UseAuth {
+	if s.cfg.Storage.UseAuth {
 		req.Header.Set(
 			"Authorization",
-			"Basic "+base64.StdEncoding.EncodeToString([]byte(s.cfg.ES.Username+":"+s.cfg.ES.Password)),
+			"Basic "+base64.StdEncoding.EncodeToString([]byte(s.cfg.Storage.Username+":"+s.cfg.Storage.Password)),
 		)
 	}
 
 	req.SetRequestURI(
-		s.cfg.ES.Host + ":" + s.cfg.ES.Port + s.cfg.ES.APIPrefix + s.getIndexName() + "/_bulk",
+		s.cfg.Storage.Host + ":" + s.cfg.Storage.Port + s.cfg.Storage.APIPrefix + s.getIndexName() + "/_bulk",
 	)
 
 	if err := s.makeRequest(req, resp); err != nil {
@@ -88,7 +88,7 @@ func (s *Cli) SendEvents(events []*entity.Event) error {
 }
 
 func (s *Cli) getIndexName() string {
-	return s.cfg.ES.IndexName + "-" + time.Now().Format("2006.01.02")
+	return s.cfg.Storage.IndexName + "-" + time.Now().Format("2006.01.02")
 }
 
 func (s *Cli) makeBody(events []*entity.Event) (*bytes.Buffer, error) {

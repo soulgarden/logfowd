@@ -36,9 +36,9 @@ type Watcher struct {
 func NewWatcher(cfg conf.Config, esCli *Cli, logger *zerolog.Logger) *Watcher {
 	return &Watcher{
 		cfg:       cfg,
-		event:     make(chan *entity.Event, cfg.ES.Workers*dictionary.SendBatchesNum*dictionary.FlushLogsNumber),
-		esEvents:  make(chan []*entity.Event, cfg.ES.Workers*dictionary.SendBatchesNum),
-		hasEvent:  make(chan struct{}, cfg.ES.Workers*dictionary.SendBatchesNum*dictionary.FlushLogsNumber),
+		event:     make(chan *entity.Event, cfg.Storage.Workers*dictionary.SendBatchesNum*dictionary.FlushLogsNumber),
+		esEvents:  make(chan []*entity.Event, cfg.Storage.Workers*dictionary.SendBatchesNum),
+		hasEvent:  make(chan struct{}, cfg.Storage.Workers*dictionary.SendBatchesNum*dictionary.FlushLogsNumber),
 		esCli:     esCli,
 		k8sRegexp: regexp.MustCompile(dictionary.K8sPodsRegexp),
 		state:     storage.NewState(),
@@ -53,7 +53,7 @@ func (s *Watcher) Start(ctx context.Context) {
 		return s.esSendDispatcher(ctx)
 	})
 
-	for i := 0; i < s.cfg.ES.Workers; i++ {
+	for i := 0; i < s.cfg.Storage.Workers; i++ {
 		i := i
 
 		g.Go(func() error {
@@ -450,7 +450,7 @@ func (s *Watcher) esSendDispatcher(ctx context.Context) error {
 
 	for {
 		select {
-		case <-time.After(time.Duration(s.cfg.ES.FlushInterval) * time.Millisecond):
+		case <-time.After(time.Duration(s.cfg.Storage.FlushInterval) * time.Millisecond):
 			s.sendToESByTimer()
 		case <-s.hasEvent:
 			s.sendToESByLimit()

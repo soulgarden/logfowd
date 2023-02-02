@@ -9,11 +9,11 @@ import (
 type Config struct {
 	Env       string   `json:"env" default:"prod"`
 	DebugMode bool     `json:"debug_mode"  default:"false"`
-	ES        ES       `json:"elasticsearch"`
+	Storage   Storage  `json:"storage"`
 	LogsPath  []string `json:"logs_path" default:"/var/log/pods"`
 }
 
-type ES struct {
+type Storage struct {
 	Host          string `json:"host" default:"elasticsearch"`
 	Port          string `json:"port" default:"9200"`
 	IndexName     string `json:"index_name" default:"logfowd"`

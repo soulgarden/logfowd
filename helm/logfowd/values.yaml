@@ -8,7 +8,7 @@ image:
   repository: soulgarden/logfowd
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "0.0.6"
+  tag: "0.0.7"
 
 imagePullSecrets: [ ]
 nameOverride: ""
@@ -78,7 +78,7 @@ tolerations: [ ]
 app:
   env: prod
   debug_mode: false
-  elasticsearch:
+  storage:
     host: http://elasticsearch-master
     port: 9200
     index_name: logfowd

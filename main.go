@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "github.com/mailru/easyjson/gen"
 	"github.com/rs/zerolog"
 	"github.com/soulgarden/logfowd/cmd"
 )

@@ -1,7 +1,6 @@
 package entity
 
 import "time"
-import _ "github.com/mailru/easyjson/gen"
 
 //go:generate easyjson -all
 type IndexRequest struct {

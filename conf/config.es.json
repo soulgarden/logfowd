@@ -1,7 +1,7 @@
 {
   "env": "local",
   "debug_mode": true,
-  "elasticsearch": {
+  "storage": {
     "host": "http://127.0.0.1",
     "port": "9200",
     "index_name": "logfowd",

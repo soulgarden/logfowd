@@ -6,10 +6,10 @@ require (
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/jinzhu/configor v1.2.1
 	github.com/mailru/easyjson v0.7.7
-	github.com/rs/zerolog v1.28.0
+	github.com/rs/zerolog v1.29.0
 	github.com/satori/go.uuid v1.2.0
 	github.com/spf13/cobra v1.6.1
-	github.com/valyala/fasthttp v1.43.0
+	github.com/valyala/fasthttp v1.44.0
 	golang.org/x/sync v0.1.0
 )
 

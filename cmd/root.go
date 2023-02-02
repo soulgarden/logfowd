@@ -10,7 +10,7 @@ import (
 // nolint: gochecknoglobals
 var rootCmd = &cobra.Command{
 	Use:   "logfwd",
-	Short: "Forward docker logs to ES",
+	Short: "Forward docker logs to es",
 	Args:  cobra.ExactArgs(1),
 }
 
