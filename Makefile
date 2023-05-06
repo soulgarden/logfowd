@@ -1,5 +1,5 @@
 lint: fmt
-	golangci-lint run --enable-all --fix
+	golangci-lint run --enable-all --fix .
 
 fmt:
 	gofmt -w .
@@ -19,7 +19,7 @@ docker_down dd:
 	docker-compose down
 
 build:
-	docker buildx build . -f ./docker/Dockerfile -t soulgarden/logfowd:0.0.7 --platform linux/amd64,linux/arm64/v8 --push
+	docker buildx build . -f ./docker/Dockerfile -t soulgarden/logfowd:0.0.9 --platform linux/amd64,linux/arm64/v8 --push
 
 #helm
 
