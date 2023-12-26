@@ -16,8 +16,6 @@ jobs:
 
       - name: Generate
         run: |-
-          mkdir ~/go
-          export GOPATH=~/go
           go get github.com/mailru/easyjson
           go install github.com/mailru/easyjson/...@latest
           make gen
@@ -39,8 +37,6 @@ jobs:
 
       - name: Generate
         run: |-
-          mkdir ~/go
-          export GOPATH=~/go
           go get github.com/mailru/easyjson
           go install github.com/mailru/easyjson/...@latest
           make gen
