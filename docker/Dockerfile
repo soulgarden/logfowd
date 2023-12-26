@@ -1,4 +1,4 @@
-FROM golang:1.20-alpine3.17 as builder
+FROM golang:1.21.5-alpine3.18 as builder
 
 ENV GOPATH=/go
 
@@ -11,7 +11,7 @@ RUN go get github.com/mailru/easyjson && \
     go generate ./... && \
     go build -o /bin/logfowd
 
-FROM alpine:3.17
+FROM alpine:3.18
 
 RUN adduser -S www-data -G www-data
 
