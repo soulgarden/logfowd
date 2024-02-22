@@ -1,4 +1,7 @@
 lint: fmt
+	golangci-lint run --fix .
+
+lint_all: fmt
 	golangci-lint run --enable-all --fix .
 
 fmt:

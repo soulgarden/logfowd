@@ -1,6 +1,12 @@
 name: Lint & test & build
 
-on: push
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
   golangci:
@@ -9,8 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: 1.21.5
           cache: false
@@ -24,6 +29,10 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v4
         with:
+          only-new-issues: true
+          skip-cache: true
+          skip-pkg-cache: true
+          skip-build-cache: true
           version: v1.51.2
 
   tests:
@@ -70,6 +79,6 @@ jobs:
           file: docker/Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64/v8
-          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/logfowd:0.0.11
+          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/logfowd:0.0.12
           cache-from: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/logfowd:latest
           cache-to: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/logfowd:latest,mode=max
