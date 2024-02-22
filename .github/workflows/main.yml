@@ -7,6 +7,7 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  checks: write
 
 jobs:
   golangci:
@@ -18,7 +19,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 1.21.5
-          cache: false
+          cache: falsemo
 
       - name: Generate
         run: |-
