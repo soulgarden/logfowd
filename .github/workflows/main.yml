@@ -36,8 +36,6 @@ jobs:
           skip-build-cache: true
           working-directory: .
           version: v1.51.2
-        run:
-          golangci-lint run . --out-format=github-actions
   tests:
     runs-on: ubuntu-latest
     steps:
