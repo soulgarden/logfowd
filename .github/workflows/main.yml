@@ -7,6 +7,7 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  checks: write
 
 jobs:
   golangci:
@@ -33,8 +34,8 @@ jobs:
           skip-cache: true
           skip-pkg-cache: true
           skip-build-cache: true
-          version: v1.51.2
-
+          working-directory: .
+          version: v1.56.2
   tests:
     runs-on: ubuntu-latest
     steps:

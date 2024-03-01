@@ -13,4 +13,4 @@ issues:
         - wrapcheck
         - tagliatelle
         - varnamelen
-  enable-all: true
+
