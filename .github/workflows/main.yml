@@ -78,7 +78,7 @@ jobs:
           platforms: linux/amd64,linux/arm64/v8
 
       - name: Build
-        if: env.DO_PUSH == false
+        if: env.DO_PUSH != true
         uses: docker/build-push-action@v5
         with:
           context: .
