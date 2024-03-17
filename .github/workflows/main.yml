@@ -78,12 +78,24 @@ jobs:
           platforms: linux/amd64,linux/arm64/v8
 
       - name: Build
+        if: env.DO_PUSH == false
         uses: docker/build-push-action@v5
         with:
           context: .
           file: docker/Dockerfile
-          push: env.DO_PUSH
+          push: false
+          platforms: linux/amd64
+          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/logfowd:0.0.13
+          cache-from: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/logfowd:latest
+
+      - name: Build and push
+        if: env.DO_PUSH == true
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
           platforms: linux/amd64,linux/arm64/v8
-          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/logfowd:0.0.12
+          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/logfowd:0.0.13
           cache-from: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/logfowd:latest
           cache-to: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/logfowd:latest,mode=max
