@@ -22,7 +22,7 @@ docker_down dd:
 	docker-compose down
 
 build:
-	docker buildx build . -f ./docker/Dockerfile -t soulgarden/logfowd:0.0.12 --platform linux/amd64 --push
+	docker buildx build . -f ./docker/Dockerfile -t soulgarden/logfowd:0.0.13 --platform linux/amd64 --push
 
 #helm
 
