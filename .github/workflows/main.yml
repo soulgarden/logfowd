@@ -67,7 +67,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Login to Docker Hub
-        if: env.DO_PUSH == true
+        if: ${{ env.DO_PUSH }}
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
@@ -82,7 +82,7 @@ jobs:
         run: echo ${{ env.DO_PUSH }} && echo ${{ env.BRANCH }}
 
       - name: Build
-        if: env.DO_PUSH != true
+        if: ${{ !env.DO_PUSH }}
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -93,7 +93,7 @@ jobs:
           cache-from: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/logfowd:latest
 
       - name: Build and push
-        if: env.DO_PUSH == true
+        if: ${{ env.DO_PUSH }}
         uses: docker/build-push-action@v5
         with:
           context: .
