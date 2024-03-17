@@ -77,9 +77,6 @@ jobs:
         with:
           platforms: linux/amd64,linux/arm64/v8
 
-      - name: debug
-        run: echo ${{ env.DO_PUSH }} && echo ${{ env.BRANCH }}
-
       - name: Build
         if: ${{ env.DO_PUSH == 'false' }}
         uses: docker/build-push-action@v5
