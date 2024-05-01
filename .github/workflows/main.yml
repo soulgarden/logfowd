@@ -31,7 +31,7 @@ jobs:
           make gen
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@v5
         with:
           only-new-issues: true
           skip-cache: true
