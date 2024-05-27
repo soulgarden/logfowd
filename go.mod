@@ -6,16 +6,16 @@ require (
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/jinzhu/configor v1.2.2
 	github.com/mailru/easyjson v0.7.7
-	github.com/rs/zerolog v1.32.0
+	github.com/rs/zerolog v1.33.0
 	github.com/satori/go.uuid v1.2.0
 	github.com/spf13/cobra v1.8.0
-	github.com/valyala/fasthttp v1.52.0
+	github.com/valyala/fasthttp v1.54.0
 	go.uber.org/automaxprocs v1.5.3
 	golang.org/x/sync v0.7.0
 )
 
 require (
-	github.com/BurntSushi/toml v1.3.2 // indirect
+	github.com/BurntSushi/toml v1.4.0 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
