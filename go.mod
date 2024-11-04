@@ -3,13 +3,13 @@ module github.com/soulgarden/logfowd
 go 1.21.5
 
 require (
-	github.com/fsnotify/fsnotify v1.7.0
+	github.com/fsnotify/fsnotify v1.8.0
 	github.com/jinzhu/configor v1.2.2
 	github.com/mailru/easyjson v0.7.7
 	github.com/rs/zerolog v1.33.0
 	github.com/satori/go.uuid v1.2.0
 	github.com/spf13/cobra v1.8.1
-	github.com/valyala/fasthttp v1.56.0
+	github.com/valyala/fasthttp v1.57.0
 	go.uber.org/automaxprocs v1.6.0
 	golang.org/x/sync v0.8.0
 )
