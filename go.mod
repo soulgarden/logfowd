@@ -5,7 +5,7 @@ go 1.21.5
 require (
 	github.com/fsnotify/fsnotify v1.8.0
 	github.com/jinzhu/configor v1.2.2
-	github.com/mailru/easyjson v0.7.7
+	github.com/mailru/easyjson v0.9.0
 	github.com/rs/zerolog v1.33.0
 	github.com/satori/go.uuid v1.2.0
 	github.com/spf13/cobra v1.8.1
